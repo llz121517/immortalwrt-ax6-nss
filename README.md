@@ -207,6 +207,10 @@ immortalwrt/bin/targets/qualcommax/ipq807x/immortalwrt-qualcommax-ipq807x-redmi_
 固件版本与各接口 checksum 状态。`sysupgrade` 只保留 `/etc`，所以这些工具属于镜像内容、
 不会因升级丢失；后续用 `opkg/apk` 手动装的包则会丢，需要重装。
 
+`mtr` 不在镜像里（25.12 的 defconfig 把它丢掉了）；需要时在路由器上
+`apk add mtr-nojson`（会装到 overlay，sysupgrade 后丢失），或下次构建时在 `.config`
+里加 `CONFIG_PACKAGE_mtr-nojson=y` 再编。`tcpdump`、`traceroute` 已随镜像带上。
+
 ---
 
 ## 兼容性警告（刷机前必读）
@@ -336,8 +340,8 @@ nss-ax6-stock/
 ├── patch-platform-sh.py         # platform.sh 单卷升级补丁器
 ├── patches/                     # 20 个内核补丁（含手工 rebase 的 bonding）
 ├── files/                       # NSS DTS + 内核源码文件（skb recycler 等）
-├── images/                      # manifest + SHA256SUMS（二进制走 Release）
-├── tools/                       # SSH 助手（凭证走环境变量）
+├── images/                      # SHA256SUMS + README（二进制走 Release）
+├── tools/                       # SSH 助手 + verify-offload.py（NSS 加速验证脚本）
 └── docs/JOURNAL.md              # 完整构建时间线与失败记录
 ```
 
@@ -363,6 +367,10 @@ nss-ax6-stock/
 
 ## 下载 / 许可
 
-- Release：[`v25.12-nss`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)（sysupgrade 镜像 + SHA256）
+- Release [`v25.12-nss-p2`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
+  — phase-2 镜像（有线 + WiFi NSS 加速 + 常用工具），36,034,836 B，sha256 `a3bb091c…`
+- Release [`v25.12-nss`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)
+  — phase-1 镜像（有线 NSS 加速），34,621,716 B，sha256 `ea0b8fe9…`
+- 校验和见 [images/SHA256SUMS](images/SHA256SUMS)
 - 代码与脚本：GPL-2.0（与 OpenWrt / ImmortalWrt / NSS 驱动一致）
 - `patches/`、`files/` 保留其上游项目许可；不含 Qualcomm 专有固件（由 `nss-firmware` 包自行下载）
