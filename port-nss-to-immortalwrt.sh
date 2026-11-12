@@ -99,7 +99,11 @@ rework_ecm() {
 	return 0
 }
 
-if [ "${4:-}" = "--ecm-only" ]; then
+ECM_ONLY=0
+for _arg in "$@"; do
+	[ "$_arg" = "--ecm-only" ] && ECM_ONLY=1
+done
+if [ "$ECM_ONLY" -eq 1 ]; then
 	rework_ecm || exit 1
 	echo "ECM feed rework done."
 	exit 0
