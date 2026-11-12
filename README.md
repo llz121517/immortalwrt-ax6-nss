@@ -37,7 +37,7 @@
 | 3 | 加 3 个 NSS dtsi，并给 `ipq8071-ax3600.dtsi` 加 1 行 `#include "ipq8074-nss.dtsi"` | `nss dtsi: 3` |
 | 4 | 校验 `ipq8071-ax6-stock.dts`（官方已正确，仅验证） | `root=: /dev/ubiblock0_1` |
 | 5 | **`platform.sh` 改为单卷升级**（替换 A/B 逻辑） | `platform.sh: 1` |
-| 6 | NSS kmods 进 `DEFAULT_PACKAGES` + `uci-defaults/99-nss-offload` 开启 `flow_offloading_hw` | `nss kmods: 2` |
+| 6 | NSS kmods 进 `DEFAULT_PACKAGES` + `uci-defaults/99-nss-offload` **关闭** nft flow offloading（让 ECM 独占快路径） | `nss kmods: 2` |
 
 ### 内核补丁应用性 — 已实测（最有价值的验证）
 
@@ -132,19 +132,24 @@ lsmod | grep -E 'qca_nss|ecm'
 ls /dev/nss*            # 应出现 NSS 字符设备
 ls /sys/kernel/debug/nss* 2>/dev/null
 
-# 2) 硬件 offload 生效了吗（关键判据）
-grep -c HW_OFFLOAD /proc/net/nf_conntrack     # 应 > 0
-grep -c '\[OFFLOAD\]' /proc/net/nf_conntrack
+# 2) NSS 固件启动了吗（关键）
+dmesg | grep -iE 'nss|ecm' | grep -E 'booted|init complete|fw version'
 
-# 3) NSS 固件版本
-dmesg | grep -i nss | head -20
-cat /sys/module/qca_nss_drv/parameters/* 2>/dev/null
+# 3) 硬件加速真的生效了吗（真正的判据）
+#    前提：fw4 的 nft flow offloading 必须关闭（见第 7 节），否则软件 flowtable 抢走连接：
+#      uci set firewall.@defaults[0].flow_offloading='0'
+#      uci set firewall.@defaults[0].flow_offloading_hw='0'
+#    然后跑一段 LAN->WAN 大流量，同时观察：
+watch -n1 'cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count'   # 应 > 0（实测 14~20）
+ecm_dump.sh | grep 'nss_v4.ported.accel_mode' | head                   # 应出现 accel_mode=2
 
 # 4) 负载对比（刷机前 CPU ~5.9% @ 97Mbps）
 top -bn1 | head -3
 ```
 
-**成功判据**：`HW_OFFLOAD` 计数 > 0（此前是 0，只有 `OFFLOAD` 软件加速）。
+**成功判据**：`accelerated_count > 0` 且 `accel_mode=2`。**不是** `nf_conntrack` 里的
+`HW_OFFLOAD` 标记——那是 nft flowtable 硬件 offload 的计数器，qca-nss-ecm 走自己的
+conntrack 快路径，根本不经过它（实测刷机后 `HW_OFFLOAD=0`，但加速确实生效）。
 
 ---
 
@@ -543,16 +548,49 @@ rootfs 里 bonding.ko / ecm.ko / 4 个 nss ko / 2 个 nss 固件全在
 补丁已重新生成：744 行（原 705 行 + 这两个 hunk），dry-run 干净，仓库和 Arch 上
 `~/ax6/scripts/patches/` 都已更新。
 
+### 2026-11-12 刷机验证 —— 成功（这是整份文档里最重要的一节）
+
+镜像 `sha256 38f5b6f7…`（含「nft offload 默认关闭」的 uci-defaults）已刷入设备，
+`sysupgrade` **保留配置**（LAN 192.168.10.1 / WiFi / OpenClash 配置都在）。
+
+**启动验证（全部通过）**
+```
+kernel 6.12.116 / ImmortalWrt 25.12-SNAPSHOT r0-761b7ff
+qca-nss 39000000.nss: NSS fw version: NSS.FW.12.5-210-HK.R
+qca-nss 39000000.nss: NSS core 0 booted successfully
+qca-nss 39400000.nss: NSS core 1 booted successfully
+ECM init / ECM init complete
+bonding 139264 3 ecm,qca_nss_bridge_mgr,qca_nss_vlan   ← 手工移植的 bond_cb/bond_get_id 在跑
+qca_nss_dp 49152 1 qca_nss_drv   (LAN1/2/3 + WAN 全部由 nss-dp 接管)
+WiFi: 2.4G ch1 + 5G ch149 80MHz，正常
+```
+
+**硬件加速验证**
+```
+有线 Windows(192.168.10.122) -> WAN 下载:  accelerated_count 14→19,  accel_mode=2
+WiFi Arch(192.168.10.133)   -> WAN 下载:  accelerated_count 19→20,  accel_mode=2
+实测吞吐 ~85 Mbit/s（用户宽带上限，不是转发瓶颈），CPU 空闲 98%+
+```
+
+**踩过的三个坑（写下来防止下次重犯）**
+1. `sysupgrade` 不能用前台 SSH 触发：SSH 通道一断，sysupgrade 就收 SIGPIPE 死在
+   "Saving config files"。必须用 `( sysupgrade -v ... >/tmp/log 2>&1 </dev/null & )` 完全脱离。
+2. **刷机后 DNS 全断**：`/etc/config/dhcp` 保留的 `noresolv=1` + `server=127.0.0.1#7874`
+   指向 OpenClash 的 DNS 端口，但 OpenClash 程序本体不会随 sysupgrade 保留（只保留 /etc）。
+   临时修法：改成 223.5.5.5 / 119.29.29.29。
+3. **ECM 拒绝加速（核心坑）**：`nft` 的 `forward` 链第一行 `flow add @ft` 是软件 flowtable，
+   它抢在 ECM 的 conntrack hook 前面接管已建立的流 → ECM 永远看不到回程包
+   （`slow_path_packets=1`、`default.pr.accel=denied`）→ `accelerated_count=0`。
+   关掉 `flow_offloading` + `flow_offloading_hw` 后立刻 14~20 条连接被加速。
+   这个修复已写成 `uci-defaults/99-nss-offload` 进默认镜像。
+
 ### 收尾状态
 
-- 编译结束 01:30，09:46 又补了 LAG 发包路径重打一次；两次都 `EXIT_CODE=0`。
-- 性能已恢复满速：`no_turbo=0`、`max_perf_pct=100`、PL1 `15000000`（09:43 设置）。
-- 两台机器昨晚都挂起（Arch 笔记本 + Windows PC），Arch 上的兜底计划任务
-  `AX6-AutoSleep-Fallback` 已删除；今早 09:35 用户手动按电源键唤醒 Arch。
-- **没有刷机**，等今天一起；路由器现在还是原厂 ImmortalWrt 25.12.1 r37978，bash 5.3.20 已装、
-  默认 shell 仍是 `/bin/ash`、OpenClash 保留规则模式。
-- 顺便确认：原厂固件其实带了 `qca-nss-dp.ko`，但没有 `nss-drv`/`ecm`，所以 NSS 从来没真正跑起来
-  （与 `HW_OFFLOAD=0`、kallsyms 无 `nss_drv` 一致）。
-- 今天议程：① 一起确认镜像→刷机（sysupgrade -n，救援靠 U-Boot HTTP `http://192.168.1.1`）；
-  ② 刷好后验 `nss_drv` 加载、`HW_OFFLOAD=1`、桥/VLAN 流量走 NSS、CPU 占用；
-  ③ 第二阶段 WiFi NSS（98 个 mac80211 补丁）。
+- 编译：01:30 首次成功、09:46 补 LAG 发包、10:56 补「nft offload 关闭」默认配置，
+  三次都 `EXIT_CODE=0`。
+- **已经刷机**（11-12 上午），旧固件 ImmortalWrt 25.12.1 r37978 备份在
+  `router-preflash/`（配置 tar + 10 份状态快照 + mtd0-8 完整镜像，含不可再生的 `art`）。
+- 待办：① 重装 OpenClash（包不随 sysupgrade 保留，配置还在）；② 第二阶段 WiFi NSS
+  （qosmio `mac80211/patches/nss/` 的 98 个补丁 + `NSS_DRV_WIFIOFFLOAD_ENABLE`）；
+  ③ 可选：把 0600-3 的 rebase 过程脚本化，避免下次内核升级再手改。
+

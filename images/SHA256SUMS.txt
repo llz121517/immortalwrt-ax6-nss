@@ -1,1 +1,1 @@
-df0418b89842db21079dfc1d823c3bf2500ac738a3e24f6e1bb2c522b378d9ad  immortalwrt-qualcommax-ipq807x-redmi_ax6-stock-squashfs-sysupgrade.bin
+38f5b6f73bd27b239621a90737d550072263a8d426c55c90731357f3be7e8b4f  immortalwrt-qualcommax-ipq807x-redmi_ax6-stock-squashfs-sysupgrade.bin
