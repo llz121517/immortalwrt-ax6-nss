@@ -346,6 +346,16 @@ cd "$IW"
 ./scripts/feeds install -a >>"$LOG" 2>&1 || die "feeds install 失败，见 $LOG"
 ok "feeds 更新完成"
 
+# qca-nss-ecm 一看到 CONFIG_PACKAGE_kmod-vxlan 就会去编 VXLAN 接口层，而它调用的
+# vxlan_fdb_update_mac() 只存在于 0603-5-qca-nss-clients-add-vxlan-support.patch
+# （本移植集有意不携带），编译期就会 implicit declaration 失败。关掉卸载、保留模块。
+ECM_MK="$IW/feeds/nss_packages/qca-nss-ecm/Makefile"
+if [ -f "$ECM_MK" ]; then
+	python3 "$(dirname "$0")/patch-ecm-vxlan-offload.py" "$ECM_MK" || die "ECM vxlan 补丁失败"
+else
+	die "找不到 $ECM_MK（feeds install 没把 nss_packages 装上？）"
+fi
+
 # ============================================================================
 say "生成 .config"
 # ============================================================================

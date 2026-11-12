@@ -421,6 +421,22 @@ chmod +x "$FW_DEFAULTS/99-nss-offload"
 ok "added uci-defaults/99-nss-offload (nft offload OFF, ECM owns NSS fast path)"
 
 # ---------------------------------------------------------------------------
+say "6.5/6 ECM: VXLAN offload off (kernel patch 0603-5 is not carried)"
+# ---------------------------------------------------------------------------
+# As soon as CONFIG_PACKAGE_kmod-vxlan is selected, qca-nss-ecm compiles its
+# VXLAN interfacing layer, which calls vxlan_fdb_update_mac().  That helper is
+# only added by 0603-5-qca-nss-clients-add-vxlan-support.patch, which this port
+# intentionally does not carry, so the build dies with "implicit declaration of
+# function 'vxlan_fdb_update_mac'".  Keep the module usable on the slow path and
+# skip the offload instead.
+ECM_MK="$IW/feeds/nss_packages/qca-nss-ecm/Makefile"
+if [ -f "$ECM_MK" ]; then
+	"$PY" "$SRC/patch-ecm-vxlan-offload.py" "$ECM_MK" || FAIL=1
+else
+	printf '   [..] %s not present yet -- run patch-ecm-vxlan-offload.py after feeds install\n' "$ECM_MK"
+fi
+
+# ---------------------------------------------------------------------------
 say "verification"
 # ---------------------------------------------------------------------------
 printf 'nss dtsi:      '; ls "$DTS_DIR" | grep -c 'nss\.dtsi' || true
