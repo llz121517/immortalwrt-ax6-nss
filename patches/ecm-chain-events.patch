@@ -1,0 +1,72 @@
+From: llz121517 <>
+Subject: [PATCH] ecm: support CONFIG_NF_CONNTRACK_CHAIN_EVENTS (nft-fullcone)
+
+ImmortalWrt's kmod-nft-fullcone sets CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y,
+which switches nf_conntrack_register_notifier() to the notifier_block API.
+ECM patch 0006 assumes the single-registrant nf_ct_event_notifier API, so the
+module would no longer build with that symbol enabled.  Wrap ECM's ct_event
+callback in a notifier_block when the chain-events API is in use; the expect
+event path is untouched (it keeps using nf_ct_event_notifier).
+
+--- a/ecm_conntrack_notifier.c
++++ b/ecm_conntrack_notifier.c
+@@ -381,9 +381,27 @@
+ }
+ 
+ /*
+- * struct nf_ct_event_notifier ecm_conntrack_notifier
++ * struct notifier_block ecm_conntrack_notifier
+  *	Netfilter conntrack event system to monitor connection tracking changes
+  */
++#ifdef CONFIG_NF_CONNTRACK_CHAIN_EVENTS
++/*
++ * With CONFIG_NF_CONNTRACK_CHAIN_EVENTS (nft-fullcone) conntrack events are
++ * delivered through a notifier chain and nf_conntrack_register_notifier()
++ * takes a struct notifier_block. struct nf_ct_event_notifier is then only
++ * used by the expect-event API.
++ */
++static int ecm_conntrack_event_chain(struct notifier_block *this,
++				     unsigned long events, void *ptr)
++{
++	return ecm_conntrack_event((unsigned int)events,
++				   (const struct nf_ct_event *)ptr);
++}
++
++static struct notifier_block ecm_conntrack_notifier = {
++	.notifier_call	= ecm_conntrack_event_chain,
++};
++#else
+ static struct nf_ct_event_notifier ecm_conntrack_notifier = {
+ #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0))
+     .fcn	= ecm_conntrack_event,
+@@ -392,6 +410,7 @@
+ #endif
+ };
+ #endif
++#endif
+ 
+ /*
+  * ecm_conntrack_notifier_stop()
+@@ -427,7 +446,7 @@
+ 	/*
+ 	 * Eventing subsystem is available so we register a notifier hook to get fast notifications of expired connections
+ 	 */
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0))
++#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)) || defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
+    result = nf_conntrack_register_notifier(&init_net, &ecm_conntrack_notifier);
+ 	if (result < 0) {
+ 		DEBUG_ERROR("Can't register nf notifier hook.\n");
+@@ -478,10 +497,10 @@
+ #ifdef ECM_IPV6_ENABLE
+ 	nf_ct_netns_put(&init_net, NFPROTO_IPV6);
+ #endif
+-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0))
+-	nf_conntrack_unregister_notifier(&init_net, &ecm_conntrack_notifier);
+-#else
++#if !(LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)) && !defined(CONFIG_NF_CONNTRACK_CHAIN_EVENTS)
+    nf_conntrack_unregister_notifier(&init_net);
++#else
++	nf_conntrack_unregister_notifier(&init_net, &ecm_conntrack_notifier);
+ #endif
+ #endif
+ 	/*

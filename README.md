@@ -145,6 +145,9 @@ WiFi offload 生效后 `iw station dump` 字节数不再增长属正常（数据
 5. WiFi NSS 补丁不能按需裁剪，失败用 `regen-nss-hunks.py` 重生成，不要手写 hunk。
 6. 补丁验证只认 `make package/kernel/mac80211/prepare`（fuzz 2），`patch -p1` 默认 fuzz 会误报。
 7. PC 上的代理（FlClash 等）fake-IP 会污染测试，测加速前处理掉。
+8. `kmod-nft-fullcone` 的 `KCONFIG=CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y` 会切换 conntrack notifier API，ECM 必须带 `patches/ecm-chain-events.patch`（由 `port-nss-to-immortalwrt.sh --ecm-only` 装进 feed 作 0007），否则编译报 `incompatible pointer type`。
+9. `kmod-qca-nss-drv-bridge-mgr`/`vlan-mgr` 依赖 `NSS_DRV_BRIDGE_ENABLE`/`NSS_DRV_VLAN_ENABLE`，不显式开 `=y` 会被 `make defconfig` 改回 `not set`，桥接/VLAN 流量就不进 NSS；构建脚本末尾有断言防这个静默失效。
+10. `fullcone`/`fullcone6` 只是 uci 开关，缺 `kmod-nft-fullcone` 时 fw4 会静默关闭 fullcone；本镜像已内置，并在 `uci-defaults/98-fullcone` 里默认开启。
 
 ## 仓库结构
 
@@ -166,8 +169,11 @@ nss-ax6-stock/
 
 - `ubiblock0_1` 写错会砖（官方 DTS 正确，脚本不改它）；改机 U-Boot 没有自动回滚，失败只能进它自带的 HTTP 网页恢复。
 - WiFi NSS 失效时把 `ath11k.nss_offload` 置 0（或 `nss_offload=0` 启动参数）回退原生 ath11k。
-- 镜像与校验和：[v25.12-nss-p2](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
-  （sha256 `a3bb091c…`）、[v25.12-nss](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)（sha256 `ea0b8fe9…`），
-  见 [images/SHA256SUMS](images/SHA256SUMS)。
+- 镜像下载：[v25.12-nss-p2](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
+  36,034,836 B，sha256 `a3bb091c889de7048efa83b8a97de106990d778bf9055446360197dc19313016`；
+  [v25.12-nss](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)
+  34,621,716 B，sha256 `ea0b8fe95f228115e8f4ccee161be2dc664792ba6e4da6a900f4f0d375557215`。
+  两个 Release 的 asset 同名，校验时按 [images/README](images/README.md) 重命名后
+  `sha256sum -c images/SHA256SUMS`（该文件是纯 `sha256sum -c` 格式，无注释行）。
 - 代码与脚本 GPL-2.0；`patches/`、`files/` 保留上游许可；不含 Qualcomm 专有固件。
 - 文档：[docs/WIFI-NSS-RESEARCH.md](docs/WIFI-NSS-RESEARCH.md)、[CREDITS.md](CREDITS.md)。

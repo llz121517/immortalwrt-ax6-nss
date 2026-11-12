@@ -129,223 +129,24 @@ else
 fi
 
 # ============================================================================
-say "3/7 移植 NSS 内核补丁"
+say "3/7 移植 NSS（内核补丁 + 8 个内核源文件 + DTS + profile + platform.sh）"
 # ============================================================================
-QC="$IW/target/linux/qualcommax"
-PDIR="$QC/patches-6.12"
-[ -d "$PDIR" ] || die "找不到 $PDIR（ImmortalWrt 分支不对？）"
-
-# 实测顺序：0102 (ImmortalWrt 自带) 先插入 nss@40000000，0600-0 才能改名
-PATCHES=(
-	0600-0-arm64-dts-ipq8074-rename-nss-region.patch
-	0600-1-qca-nss-ecm-support-CORE.patch
-	0600-2-qca-nss-ecm-support-PPPOE-offload.patch
-	0600-3-qca-nss-ecm-support-net-bonding.patch
-	0600-5-qca-nss-ecm-support-macvlan.patch
-	0602-1-qca-nss-drv-add-qdisc-support.patch
-	0603-1-qca-nss-clients-add-qdisc-support.patch
-	0603-6-qca-nss-clients-add-bridge-mgr-support.patch
-	0606-1-qca-nss-ecm-bridge-Fixes-for-Bridge-VLAN-Filtering.patch
-)
-ADDED=0
-for p in "${PATCHES[@]}"; do
-	if [ -f "$PDIR/$p" ]; then
-		ok "$p 已存在"
-		continue
-	fi
-	src=""
-	[ -f "$PORT_DIR/patches/$p" ] && src="$PORT_DIR/patches/$p"
-	[ -z "$src" ] && [ -f "$QS/target/linux/qualcommax/patches-6.12/$p" ] && \
-		src="$QS/target/linux/qualcommax/patches-6.12/$p"
-	if [ -z "$src" ]; then
-		warn "缺少 $p"
-		continue
-	fi
-	cp "$src" "$PDIR/$p" && ADDED=$((ADDED+1)) && ok "$p"
-done
-info "新增 $ADDED 个补丁"
-# 确认 ImmortalWrt 自带 0102（0600-0 的前置）
-[ -f "$PDIR/0102-arm64-dts-ipq8074-add-reserved-memory-nodes.patch" ] \
-	&& ok "0102 前置补丁存在" \
-	|| warn "0102 不存在，0600-0 可能打不上"
+# 这里不再自己维护补丁清单。port-nss-to-immortalwrt.sh 是唯一来源：
+#   20 个内核补丁（0600-0/1/2/3-rebased/5/6/7、0602-1、0603-1/2/3/4/6/7/8、
+#   0604-1、0605-1、0606-1、0607-1、0981-1）、8 个内核源文件（DSCPREMARK +
+#   skb recycler 等）、config-6.12 符号、3 个 NSS dtsi、profile、platform.sh。
+# 两份清单曾经漂移过：本脚本自己那份只有 9 个补丁，缺 0600-6 时死在
+# nf_conntrack_dscpremark_ext.h，缺 0603-2/3 时死在 pptp_session_find()，
+# 缺 0981-1 时 qca-nss-drv 链接不上 skb recycler —— 产出的镜像根本不可用。
+"$PORT_DIR/port-nss-to-immortalwrt.sh" "$IW" "$NSS" "$QS" || die "NSS 移植失败"
 
 # ============================================================================
-say "4/7 移植 NSS 设备树"
-# ============================================================================
-DTS_DIR="$QC/files/arch/arm64/boot/dts/qcom"
-[ -d "$DTS_DIR" ] || die "找不到 DTS 目录 $DTS_DIR"
-
-for d in ipq8074-nss.dtsi ipq6018-nss.dtsi ipq5018-nss.dtsi; do
-	if [ -f "$DTS_DIR/$d" ]; then
-		ok "$d 已存在"
-		continue
-	fi
-	src=""
-	[ -f "$PORT_DIR/files/$d" ] && src="$PORT_DIR/files/$d"
-	[ -z "$src" ] && src="$(find "$QS" -name "$d" -print -quit 2>/dev/null)"
-	if [ -z "$src" ]; then
-		warn "缺少 $d"
-		continue
-	fi
-	cp "$src" "$DTS_DIR/$d" && ok "$d"
-done
-
-# 给 ax3600.dtsi 加 include（与 qosmio 的唯一差异）
-BASE_DTSI="$DTS_DIR/ipq8071-ax3600.dtsi"
-if grep -q 'ipq8074-nss\.dtsi' "$BASE_DTSI" 2>/dev/null; then
-	ok "ax3600.dtsi 已含 nss include"
-else
-	sed -i 's|^\(#include "ipq8074-ess\.dtsi"\)$|\1\n#include "ipq8074-nss.dtsi"|' "$BASE_DTSI" \
-		&& ok "ax3600.dtsi += include ipq8074-nss.dtsi" \
-		|| warn "修改 ax3600.dtsi 失败"
-fi
-
-# ============================================================================
-say "5/7 校验 ax6-stock profile"
-# ============================================================================
-STOCK_DTS="$DTS_DIR/ipq8071-ax6-stock.dts"
-if [ -f "$STOCK_DTS" ]; then
-	if grep -q 'ubiblock0_1' "$STOCK_DTS" && grep -q 'smem-part' "$STOCK_DTS"; then
-		ok "ipq8071-ax6-stock.dts 正确（ubiblock0_1 + smem-part）"
-	else
-		warn "ax6-stock.dts 不是预期版本，请检查"
-	fi
-else
-	die "缺少 $STOCK_DTS —— 这个 ImmortalWrt 分支太旧，不支持 stock 布局"
-fi
-
-MK="$QC/image/ipq807x.mk"
-if grep -q '^define Device/redmi_ax6-stock' "$MK" 2>/dev/null; then
-	ok "redmi_ax6-stock profile 已定义"
-else
-	grep -q '^TARGET_DEVICES += redmi_ax6$' "$MK" || die "$MK 结构不符"
-	python3 - "$MK" <<'PY'
-import sys
-path = sys.argv[1]
-anchor = "TARGET_DEVICES += redmi_ax6\n"
-block = """
-define Device/redmi_ax6-stock
-\t$(call Device/redmi_ax6)
-\tDEVICE_VARIANT := (stock layout)
-\tDEVICE_ALT0_VENDOR := Redmi
-\tDEVICE_ALT0_MODEL := AX6
-\tDEVICE_ALT0_VARIANT := (custom U-Boot layout)
-\tKERNEL_SIZE :=
-\tARTIFACTS :=
-endef
-TARGET_DEVICES += redmi_ax6-stock
-"""
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-if "define Device/redmi_ax6-stock" not in text:
-    i = text.find(anchor)
-    if i < 0:
-        sys.exit("anchor not found")
-    e = i + len(anchor)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(text[:e] + block.lstrip("\n") + text[e:])
-PY
-	ok "已添加 redmi_ax6-stock profile"
-fi
-
-# ============================================================================
-say "6/7 修复 platform.sh（关键！）"
-# ============================================================================
-PLATFORM="$QC/ipq807x/base-files/lib/upgrade/platform.sh"
-if [ ! -f "$PLATFORM" ]; then
-	warn "找不到 platform.sh"
-elif grep -q 'NSS-STOCK-SINGLE-VOLUME' "$PLATFORM"; then
-	ok "platform.sh 已修复"
-else
-	# 本机实测：这台 AX6 的 U-Boot 没有 flag_boot_rootfs，也没有 rootfs_1，
-	# ImmortalWrt 的 A/B 分支会 `[ "" -eq "1" ]` 报 "ash: out of range" 而中止。
-	python3 "$(dirname "$0")/patch-platform-sh.py" "$PLATFORM"
-	if grep -q 'NSS-STOCK-SINGLE-VOLUME' "$PLATFORM"; then
-		ok "platform.sh: A/B 分支已改为单卷升级"
-	else
-		warn "platform.sh 修改失败，请手工检查"
-	fi
-fi
-# 无论走哪个分支都必须验证语法。行尾写成 \\ 而不是 \ 时，shell 会把它当成
-# 转义后的反斜杠字面量，case 模式在换行处断开，source 阶段直接报
-# "syntax error: unexpected newline (expecting ")")"，sysupgrade 中止，
-# 设备从此完全无法升级。这个坑在本机构建时真实发生过一次。
-if ! sh -n "$PLATFORM" 2>/dev/null; then
-	warn "platform.sh 语法错误，sysupgrade 会直接中止："
-	sh -n "$PLATFORM" 2>&1 | head -3
-	exit 1
-fi
-ok "platform.sh 语法检查通过"
-
-# ============================================================================
-say "7/7 NSS 包与 offload 默认开启"
-# ============================================================================
-MKQ="$QC/Makefile"
-if grep -q 'kmod-qca-nss-drv' "$MKQ" 2>/dev/null; then
-	ok "NSS kmods 已在 DEFAULT_PACKAGES"
-else
-	python3 - "$MKQ" <<'PY'
-import sys
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-if "kmod-qca-nss-drv" in text:
-    sys.exit(0)
-marker = "DEFAULT_PACKAGES += \\\n"
-i = text.find(marker)
-if i < 0:
-    sys.exit("DEFAULT_PACKAGES not found")
-j = i + len(marker)
-end = j
-while True:
-    nl = text.find("\n", end)
-    if nl < 0:
-        break
-    line = text[end:nl]
-    if not line.rstrip().endswith("\\"):
-        break
-    end = nl + 1
-ins = "\tkmod-qca-nss-dp kmod-qca-nss-drv kmod-qca-nss-ecm \\\n\tkmod-qca-nss-drv-bridge-mgr \\\n"
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(text[:end] + ins + text[end:])
-PY
-	ok "已添加 NSS kmods"
-fi
-
-# feed
-FEEDS="$IW/feeds.conf"
-[ -f "$FEEDS" ] || FEEDS="$IW/feeds.conf.default"
-if grep -q 'nss_packages' "$FEEDS" 2>/dev/null; then
-	ok "nss feed 已配置"
-else
-	echo 'src-git nss_packages https://github.com/qosmio/nss-packages.git;NSS-12.5-K6.x' >> "$FEEDS"
-	ok "已添加 nss_packages feed"
-fi
-
-# uci-defaults 关闭 nft offload（ECM 独占快路径）
-UCI_DIR="$QC/ipq807x/base-files/etc/uci-defaults"
-mkdir -p "$UCI_DIR"
-cat > "$UCI_DIR/99-nss-offload" <<'SH'
-#!/bin/sh
-# nft flow offloading must stay OFF: fw4's software flowtable takes over
-# established flows before ECM's conntrack hook runs, so ECM never sees the
-# return direction and ecm_classifier_default denies acceleration forever.
-# Let qca-nss-ecm own the fast path (verified: accel_mode=2, accelerated_count>0).
-uci -q set firewall.@defaults[0].flow_offloading='0'
-uci -q set firewall.@defaults[0].flow_offloading_hw='0'
-uci -q commit firewall
-exit 0
-SH
-chmod +x "$UCI_DIR/99-nss-offload"
-ok "uci-defaults/99-nss-offload 已写入"
-
-# ============================================================================
-say "NSS WiFi offload 补丁（phase-2：ath11k / mac80211）"
+say "4/7 移植 WiFi NSS 补丁（ath11k/mac80211，phase-2）"
 # ============================================================================
 # 有线 offload 只解决以太网；WiFi 走的是原生 ath11k 软转发。phase-2 把 qosmio 的
 # ath11k/mac80211 NSS 补丁系列移植过来（subsys 27 + ath10k 1 + ath11k 69 = 97 个）。
 # 补丁之间有隐式依赖，不能"按需裁剪"；port-wifi-nss.py 是幂等的，重复执行安全。
-if python3 "$(dirname "$0")/port-wifi-nss.py" "$IW" "$QS" >>"$LOG" 2>&1; then
+if python3 "$PORT_DIR/port-wifi-nss.py" "$IW" "$QS" >>"$LOG" 2>&1; then
 	ok "WiFi NSS 补丁已移植（97 个：subsys/ath10k/ath11k）"
 else
 	warn "WiFi NSS 补丁移植失败（上游漂移？）——本次构建将退回原生 ath11k，无线不加速。"
@@ -353,25 +154,18 @@ else
 fi
 
 # ============================================================================
-say "更新 feeds"
+say "5/7 更新 feeds + ECM 补丁"
 # ============================================================================
-cd "$IW"
+cd "$IW" || die "cd $IW 失败"
 ./scripts/feeds update -a >"$LOG" 2>&1 || die "feeds update 失败，见 $LOG"
 ./scripts/feeds install -a >>"$LOG" 2>&1 || die "feeds install 失败，见 $LOG"
 ok "feeds 更新完成"
-
-# qca-nss-ecm 一看到 CONFIG_PACKAGE_kmod-vxlan 就会去编 VXLAN 接口层，而它调用的
-# vxlan_fdb_update_mac() 只存在于 0603-5-qca-nss-clients-add-vxlan-support.patch
-# （本移植集有意不携带），编译期就会 implicit declaration 失败。关掉卸载、保留模块。
-ECM_MK="$IW/feeds/nss_packages/qca-nss-ecm/Makefile"
-if [ -f "$ECM_MK" ]; then
-	python3 "$(dirname "$0")/patch-ecm-vxlan-offload.py" "$ECM_MK" || die "ECM vxlan 补丁失败"
-else
-	die "找不到 $ECM_MK（feeds install 没把 nss_packages 装上？）"
-fi
+# ECM 的 feed Makefile 只有 feeds install 之后才存在，所以这一步单独再跑一次：
+# 关 VXLAN offload + 装 0007 chain-events 补丁（kmod-nft-fullcone 需要）。
+"$PORT_DIR/port-nss-to-immortalwrt.sh" "$IW" "$NSS" "$QS" --ecm-only || die "ECM 补丁失败"
 
 # ============================================================================
-say "生成 .config"
+say "6/7 生成 .config"
 # ============================================================================
 cat > .config <<'EOF'
 CONFIG_TARGET_qualcommax=y
@@ -384,6 +178,11 @@ CONFIG_PACKAGE_kmod-qca-nss-dp=y
 CONFIG_PACKAGE_kmod-qca-nss-drv=y
 CONFIG_PACKAGE_kmod-qca-nss-ecm=y
 CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y
+# 上面两个包的 Kconfig 依赖 @NSS_DRV_BRIDGE_ENABLE / @NSS_DRV_VLAN_ENABLE，
+# 这两个符号默认 n。不显式打开时 make defconfig 会把 kmod 行改回 "not set"，
+# 桥接/VLAN 流量就不进 NSS（静默失效，路由流测试照不到）。
+CONFIG_NSS_DRV_BRIDGE_ENABLE=y
+CONFIG_NSS_DRV_VLAN_ENABLE=y
 CONFIG_PACKAGE_nss-firmware=y
 CONFIG_PACKAGE_nss-firmware-ipq807x=y
 
@@ -434,22 +233,38 @@ CONFIG_PACKAGE_ttyd=y
 CONFIG_PACKAGE_luci-app-ttyd=y
 CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
 
-# MUST stay off.  kmod-nft-fullcone's Makefile does
-#   KCONFIG:=CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y
-# which switches nf_conntrack_register_notifier() to the notifier_block
-# signature, while qca-nss-ecm is written against the nf_ct_event_notifier
-# one.  Leaving it on breaks the ECM build with
-#   "passing argument 2 of 'nf_conntrack_register_notifier' from incompatible
-#    pointer type" + "too few arguments to nf_conntrack_unregister_notifier".
-# (firewall4's +kmod-nft-fullcone dependency is stripped by the port script.)
-# CONFIG_PACKAGE_kmod-nft-fullcone is not set
+# nft fullcone (IPv4 + IPv6). kmod-nft-fullcone's KCONFIG sets
+# CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y, which switches
+# nf_conntrack_register_notifier() to the notifier_block API. qca-nss-ecm needs
+# feed patch 0007 for that (installed by port-nss-to-immortalwrt.sh
+# --ecm-only); without it the ECM build fails with incompatible pointer type.
+# firewall4 checks the nft_fullcone expression at runtime and disables itself if
+# the module is missing, so this must be built in for `fullcone=1` to work.
+CONFIG_PACKAGE_kmod-nft-fullcone=y
+
+# ons-usb / 光猫 USB 共享：ONT SMB1 -> AX6 cifs mount -> AX6 Samba4
+# （/usr/bin/ont-usb.sh 放 /etc 里跨 sysupgrade 保留）
+CONFIG_PACKAGE_kmod-fs-cifs=y
+CONFIG_PACKAGE_samba4-server=y
+CONFIG_PACKAGE_samba4-client=y
+CONFIG_PACKAGE_samba4-utils=y
 EOF
 make defconfig >>"$LOG" 2>&1 || die "make defconfig 失败"
 info "已选中的关键项："
-grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI|ATH11K_NSS|MAC80211_NSS|NSS_DRV_WIFI' .config | sed 's/^/    /'
+grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI|ATH11K_NSS|MAC80211_NSS|NSS_DRV_(WIFI|BRIDGE|VLAN)|nft-fullcone|kmod-fs-cifs|samba4-server' .config | sed 's/^/    /'
+# 静默失效检查：这几个符号被 defconfig 丢掉就意味着对应功能不生效。
+for sym in NSS_DRV_BRIDGE_ENABLE NSS_DRV_VLAN_ENABLE; do
+	grep -q "^CONFIG_$sym=y" .config || die "CONFIG_$sym 被 defconfig 丢掉（bridge/VLAN 不进 NSS）"
+done
+grep -q '^CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y' .config \
+	|| die 'kmod-qca-nss-drv-bridge-mgr 被 defconfig 丢掉'
+grep -q '^CONFIG_PACKAGE_kmod-nft-fullcone=y' .config \
+	|| die 'kmod-nft-fullcone 没选中，fullcone 会静默失效'
+grep -q '^CONFIG_PACKAGE_kmod-fs-cifs=y' .config \
+	|| die 'kmod-fs-cifs 没选中，ont-usb 挂载不了光猫共享'
 
 # ============================================================================
-say "开始编译（约 40-90 分钟，日志 $LOG）"
+say "7/7 开始编译（约 40-90 分钟，日志 $LOG）"
 # ============================================================================
 info "CPU ${CORES} 核，开始时间 $(date '+%H:%M:%S')"
 make -j"$CORES" V=s 2>&1 | tee -a "$LOG"

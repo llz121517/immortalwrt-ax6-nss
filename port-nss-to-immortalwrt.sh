@@ -61,6 +61,51 @@ done
 [ -n "$PY" ] || { echo "ERROR: a working python is required" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
+# ECM feed rework -- only possible after `scripts/feeds install`.
+# The full script does kernel/DTS/profile work first; a second pass with
+#   port-nss-to-immortalwrt.sh <tree> [nss] [qosmio] --ecm-only
+# applies the feed-side patches (invoked by build-ax6-nss.sh after feeds
+# install).  All of it is idempotent.
+# ---------------------------------------------------------------------------
+rework_ecm() {
+	ECM_DIR="$IW/feeds/nss_packages/qca-nss-ecm"
+	ECM_MK="$ECM_DIR/Makefile"
+	if [ ! -f "$ECM_MK" ]; then
+		printf '   [..] %s not present yet -- run --ecm-only after feeds install\n' "$ECM_MK"
+		return 0
+	fi
+	# As soon as CONFIG_PACKAGE_kmod-vxlan is selected, qca-nss-ecm compiles its
+	# VXLAN interfacing layer, which calls vxlan_fdb_update_mac().  That helper
+	# is only added by 0603-5-...-vxlan-support.patch, which this port
+	# intentionally does not carry, so the build dies with "implicit
+	# declaration of function 'vxlan_fdb_update_mac'".  Keep the module usable
+	# on the slow path and skip the offload instead.
+	"$PY" "$SRC/patch-ecm-vxlan-offload.py" "$ECM_MK" || return 1
+	# kmod-nft-fullcone sets CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y, which switches
+	# nf_conntrack_register_notifier() to the notifier_block API.  Feed patch
+	# 0006 targets the old struct nf_ct_event_notifier API, so 0007 below keeps
+	# ECM compiling (and accelerating) while fullcone is enabled.
+	ECM_PATCH="$ECM_DIR/patches/0007-ecm-support-conntrack-chain-events.patch"
+	if [ -f "$ECM_PATCH" ]; then
+		skip "ECM chain-events patch already present"
+	elif [ -f "$SRC/patches/ecm-chain-events.patch" ]; then
+		mkdir -p "$ECM_DIR/patches"
+		cp "$SRC/patches/ecm-chain-events.patch" "$ECM_PATCH" || return 1
+		ok "added 0007-ecm-support-conntrack-chain-events.patch"
+	else
+		printf '   [!!] %s/patches/ecm-chain-events.patch missing\n' "$SRC"
+		return 1
+	fi
+	return 0
+}
+
+if [ "${4:-}" = "--ecm-only" ]; then
+	rework_ecm || exit 1
+	echo "ECM feed rework done."
+	exit 0
+fi
+
+# ---------------------------------------------------------------------------
 say "1/6 NSS package feed"
 # ---------------------------------------------------------------------------
 FEEDS="$IW/feeds.conf"
@@ -420,6 +465,22 @@ SH
 chmod +x "$FW_DEFAULTS/99-nss-offload"
 ok "added uci-defaults/99-nss-offload (nft offload OFF, ECM owns NSS fast path)"
 
+# kmod-nft-fullcone is part of the image and firewall4 only emits fullcone
+# rules when the nft_fullcone expression exists at runtime (it self-disables
+# otherwise).  Enable it for both families; ECM keeps working because feed
+# patch 0007 adapts it to the chain-events notifier API.
+cat > "$FW_DEFAULTS/98-fullcone" <<'SH'
+#!/bin/sh
+# Only this board runs the NSS/ECM image that also ships kmod-nft-fullcone.
+[ "$(cat /tmp/sysinfo/board_name 2>/dev/null)" = "redmi,ax6-stock" ] || exit 0
+uci -q set firewall.@defaults[0].fullcone='1'
+uci -q set firewall.@defaults[0].fullcone6='1'
+uci -q commit firewall
+exit 0
+SH
+chmod +x "$FW_DEFAULTS/98-fullcone"
+ok "added uci-defaults/98-fullcone (nft fullcone on for IPv4+IPv6)"
+
 # luci-app-openclash ships no /lib/upgrade/keep.d rule of its own, so /etc/openclash
 # (subscription, rules, GeoIP, the ~35 MB clash core) is wiped by every sysupgrade
 # while /etc/config/openclash survives via base-files.  Recreate the keep rule once
@@ -435,20 +496,9 @@ chmod +x "$FW_DEFAULTS/97-openclash-keep"
 ok "added uci-defaults/97-openclash-keep (/etc/openclash survives sysupgrade)"
 
 # ---------------------------------------------------------------------------
-say "6.5/6 ECM: VXLAN offload off (kernel patch 0603-5 is not carried)"
+say "6.5/6 ECM feed: VXLAN offload off + fullcone/chain-events compat"
 # ---------------------------------------------------------------------------
-# As soon as CONFIG_PACKAGE_kmod-vxlan is selected, qca-nss-ecm compiles its
-# VXLAN interfacing layer, which calls vxlan_fdb_update_mac().  That helper is
-# only added by 0603-5-qca-nss-clients-add-vxlan-support.patch, which this port
-# intentionally does not carry, so the build dies with "implicit declaration of
-# function 'vxlan_fdb_update_mac'".  Keep the module usable on the slow path and
-# skip the offload instead.
-ECM_MK="$IW/feeds/nss_packages/qca-nss-ecm/Makefile"
-if [ -f "$ECM_MK" ]; then
-	"$PY" "$SRC/patch-ecm-vxlan-offload.py" "$ECM_MK" || FAIL=1
-else
-	printf '   [..] %s not present yet -- run patch-ecm-vxlan-offload.py after feeds install\n' "$ECM_MK"
-fi
+rework_ecm || FAIL=1
 
 # ---------------------------------------------------------------------------
 say "verification"

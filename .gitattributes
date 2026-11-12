@@ -1,12 +1,2 @@
-# keep shell/patch/dts text files byte-identical on Linux build hosts
-* text=auto eol=lf
+images/SHA256SUMS text eol=lf
 *.sh text eol=lf
-*.patch text eol=lf
-*.py text eol=lf
-*.md text eol=lf
-*.dtsi text eol=lf
-*.c text eol=lf
-*.h text eol=lf
-*.bin binary
-*.tar.gz binary
-*.img binary
