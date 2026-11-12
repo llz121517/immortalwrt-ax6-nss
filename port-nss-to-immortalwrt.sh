@@ -420,6 +420,20 @@ SH
 chmod +x "$FW_DEFAULTS/99-nss-offload"
 ok "added uci-defaults/99-nss-offload (nft offload OFF, ECM owns NSS fast path)"
 
+# luci-app-openclash ships no /lib/upgrade/keep.d rule of its own, so /etc/openclash
+# (subscription, rules, GeoIP, the ~35 MB clash core) is wiped by every sysupgrade
+# while /etc/config/openclash survives via base-files.  Recreate the keep rule once
+# at first boot so it lands on the overlay and holds for all later upgrades.
+cat > "$FW_DEFAULTS/97-openclash-keep" <<'SH'
+#!/bin/sh
+[ -d /etc/openclash ] || exit 0
+mkdir -p /lib/upgrade/keep.d
+[ -f /lib/upgrade/keep.d/openclash ] || printf '/etc/openclash/\n' > /lib/upgrade/keep.d/openclash
+exit 0
+SH
+chmod +x "$FW_DEFAULTS/97-openclash-keep"
+ok "added uci-defaults/97-openclash-keep (/etc/openclash survives sysupgrade)"
+
 # ---------------------------------------------------------------------------
 say "6.5/6 ECM: VXLAN offload off (kernel patch 0603-5 is not carried)"
 # ---------------------------------------------------------------------------
