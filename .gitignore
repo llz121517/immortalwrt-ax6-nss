@@ -1,0 +1,18 @@
+# build artifacts (17 MB sysupgrade images) belong in GitHub Releases, not git
+images/*.bin
+images/*.img
+images/*.tar.gz
+*.tar.gz
+*.tar.bz2
+*.bin
+
+# local build logs / caches
+*.log
+__pycache__/
+*.pyc
+.env
+secrets*.txt
+
+# pre-flash device backups (config tarballs, mtd dumps)
+preflash*/
+router-preflash/
