@@ -93,20 +93,25 @@ kernel 5.4 MiB / rootfs 29 MiB 两个卷（见「已知坑 11」），超了直�
 `rsync` `iftop` `nload` `nano` `zstd` `lspci` `lsusb` `tcpdump` `traceroute`
 `ttyd`+`luci-app-ttyd`。`mtr` 被 defconfig 丢弃，需要时 `apk add mtr-nojson`。
 
-镜像里**故意不放** `kmod-nft-fullcone`、`kmod-fs-cifs`、`samba4-*`：rootfs 卷只有
-29 MiB（见「已知坑 11」），这三样塞不进去。它们都在构建时可用、刷机后从 feed 装：
+镜像里**故意不放** `kmod-nft-fullcone`、`kmod-fs-cifs`、`samba4-*`、`bridge-mgr/vlan-mgr`：
+rootfs 卷只有 29 MiB（见「已知坑 11」），塞不进去。构建脚本把它们设成 `<M>`——只编成 apk、
+不装进镜像，所以刷机后从构建输出装（内核模块必须用同一次构建的 apk，版本/ABI 才匹配）：
 
 ```sh
-# fullcone（内核侧 CHAIN_EVENTS 已经编进内核，ECM 由 feed 补丁 0007 适配）
-apk add kmod-nft-fullcone
-uci set firewall.@defaults[0].fullcone='1'
-uci set firewall.@defaults[0].fullcone6='1'
-uci commit firewall && /etc/init.d/firewall restart
-nft list ruleset | grep -c fullcone      # > 0 才说明规则真的生效
+# kmod 在 bin/targets/qualcommax/ipq807x/packages/，用户态包在 bin/packages/aarch64_cortex-a53/
+scp bin/targets/qualcommax/ipq807x/packages/kmod-*.apk root@192.168.10.1:/tmp/
+scp bin/packages/aarch64_cortex-a53/packages/samba4-*.apk root@192.168.10.1:/tmp/
+
+# fullcone（内核侧 CHAIN_EVENTS 已编进内核，ECM 由 feed 补丁 0007 适配）
+ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-nft-fullcone-*.apk
+  uci set firewall.@defaults[0].fullcone=1; uci set firewall.@defaults[0].fullcone6=1
+  uci commit firewall; /etc/init.d/firewall restart
+  nft list ruleset | grep -c fullcone'          # > 0 才说明规则真的生效
 
 # ont-usb：光猫 SMB1 -> AX6 cifs 挂载 -> AX6 Samba4(SMB2/3)
-apk add kmod-fs-cifs samba4-server samba4-client samba4-utils
-/etc/init.d/samba4 enable && /etc/init.d/samba4 restart
+ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-fs-cifs-*.apk
+  apk add --allow-untrusted /tmp/samba4-*.apk
+  /etc/init.d/samba4 enable; /etc/init.d/samba4 restart'
 ```
 
 ## 兼容性警告
