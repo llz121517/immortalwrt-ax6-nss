@@ -159,7 +159,7 @@ nss-ax6-stock/
 ├── patches/  files/             # 内核补丁、NSS dtsi 等源文件
 ├── images/                      # SHA256SUMS + 说明（二进制走 Release）
 ├── tools/                       # SSH 助手、verify-offload.py
-└── docs/JOURNAL.md              # 构建时间线与失败记录
+└── docs/WIFI-NSS-RESEARCH.md    # WiFi NSS 可行性调研
 ```
 
 ## 风险 / 下载 / 许可
@@ -170,4 +170,4 @@ nss-ax6-stock/
   （sha256 `a3bb091c…`）、[v25.12-nss](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)（sha256 `ea0b8fe9…`），
   见 [images/SHA256SUMS](images/SHA256SUMS)。
 - 代码与脚本 GPL-2.0；`patches/`、`files/` 保留上游许可；不含 Qualcomm 专有固件。
-- 文档：[docs/JOURNAL.md](docs/JOURNAL.md)、[CREDITS.md](CREDITS.md)。
+- 文档：[docs/WIFI-NSS-RESEARCH.md](docs/WIFI-NSS-RESEARCH.md)、[CREDITS.md](CREDITS.md)。
