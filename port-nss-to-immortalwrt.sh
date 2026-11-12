@@ -24,7 +24,7 @@
 #   - /dev/ubiblock0_1      the only ubiblock present -> root= must be _1
 #   - U-Boot env            25 vars, only flag_boot_success=1; none of
 #                           flag_boot_rootfs / flag_last_success / flag_try_*
-#   - U-Boot                HTTP recovery server at 192.168.1.1 (safety net)
+#   - U-Boot                custom (third-party) bootloader with HTTP recovery at 192.168.1.1
 #
 # Everything is idempotent.
 

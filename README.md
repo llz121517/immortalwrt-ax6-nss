@@ -1,8 +1,8 @@
 # Redmi AX6（改机 1G/1G）+ ImmortalWrt + Qualcomm NSS/ECM 硬件加速
 
 在**硬件改造过的 Redmi AX6**（IPQ8071A，1 GiB RAM / 1 GiB NAND）上运行 **ImmortalWrt**，
-有线和 WiFi 转发都交给 Qualcomm **NSS/ECM** 硬件加速。**不改 U-Boot**，只用 `sysupgrade`，
-保留小米官方 HTTP 恢复能力。
+有线和 WiFi 转发都交给 Qualcomm **NSS/ECM** 硬件加速。**不改动 U-Boot**，只用 `sysupgrade`，
+保留改机 U-Boot 自带的 HTTP 网页恢复能力（这不是小米官方功能）。
 
 > 命名：`redmi_ax6-stock` / `board_name = redmi,ax6-stock` 里的 "stock" 只指**出厂单卷 UBI
 > 分区布局**（`0 kernel / 1 rootfs / 2 rootfs_data`，U-Boot 不参与 A/B），不代表固件。
@@ -13,7 +13,7 @@
 | SoC / 目标 | IPQ8071A（`qualcommax` / `ipq807x`，aarch64_cortex-a53）|
 | 基线 | ImmortalWrt 25.12-SNAPSHOT `r0-761b7ff`，内核 6.12.116（nftables-only）|
 | 分区 | `qcom,smem-part` 单卷 UBI，`root=/dev/ubiblock0_1`，无 A/B |
-| U-Boot | 2016.01 未修改，HTTP 恢复 `http://192.168.1.1` |
+| U-Boot | 2016.01 改机版（第三方，带 HTTP 网页恢复 `http://192.168.1.1`），本工程不改动 |
 | NSS / WiFi 固件 | `NSS.FW.12.5-210-HK.R` / `WLAN.HK.2.9.0.1-02146-QCAHKSWPL_SILICONZ-1` |
 
 ## 现状
@@ -94,14 +94,14 @@ immortalwrt/bin/targets/qualcommax/ipq807x/immortalwrt-qualcommax-ipq807x-redmi_
 **只适用于「改机 + 出厂单卷布局」的 AX6（`redmi,ax6-stock`），不能刷未改造的 AX6（`redmi,ax6`）。**
 
 两者 DTS/分区/U-Boot 变量完全不同（单卷 vs 小米 A/B）。正常刷 `sysupgrade` 会因 board
-不匹配拒绝；强行 `-F` 能写进去但起不来，只能 U-Boot 恢复救砖。要给未改造的 AX6 用，
+不匹配拒绝；强行 `-F` 能写进去但起不来，只能用改机 U-Boot 的 HTTP 网页恢复救砖。要给未改造的 AX6 用，
 需用它的 `redmi_ax6` profile 重新构建：WiFi NSS 补丁与布局无关，但 DTS include 和
 `platform.sh` 要换成 A/B 版本。
 
 ## 刷机
 
 ```bash
-# 备份（救砖靠 U-Boot HTTP 192.168.1.1）
+# 备份（救砖靠改机 U-Boot 的 HTTP 网页恢复 192.168.1.1，非小米官方功能）
 ssh root@192.168.10.1 'sysupgrade -b /tmp/backup-$(date +%F).tar.gz'
 scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 
@@ -164,7 +164,7 @@ nss-ax6-stock/
 
 ## 风险 / 下载 / 许可
 
-- `ubiblock0_1` 写错会砖（官方 DTS 正确，脚本不改它）；U-Boot 无自动回滚，失败走 HTTP 恢复。
+- `ubiblock0_1` 写错会砖（官方 DTS 正确，脚本不改它）；改机 U-Boot 没有自动回滚，失败只能进它自带的 HTTP 网页恢复。
 - WiFi NSS 失效时把 `ath11k.nss_offload` 置 0（或 `nss_offload=0` 启动参数）回退原生 ath11k。
 - 镜像与校验和：[v25.12-nss-p2](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
   （sha256 `a3bb091c…`）、[v25.12-nss](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)（sha256 `ea0b8fe9…`），

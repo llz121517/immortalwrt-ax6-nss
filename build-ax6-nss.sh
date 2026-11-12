@@ -492,7 +492,7 @@ scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 
 ===== 救砖 =====
 断电 -> 按住 reset -> 上电 -> 浏览器打开 http://192.168.1.1 上传固件
-（本机 U-Boot 已确认有 HTTP 恢复服务器）
+（改机 U-Boot 自带 HTTP 网页恢复，非小米官方功能）
 
 ===== 刷完验证 NSS 是否真的工作 =====
 lsmod | grep -E 'qca_nss|ecm|ath11k'

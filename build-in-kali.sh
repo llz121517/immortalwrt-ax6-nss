@@ -161,5 +161,5 @@ Before you flash, take a backup and keep a way back:
   scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 
 If it does not come back: power-cycle while holding reset and use the U-Boot
-HTTP recovery server at 192.168.1.1 (it is present in this board's U-Boot).
+HTTP recovery server at 192.168.1.1 (a third-party bootloader feature on this board, not a Xiaomi stock one).
 EOF
