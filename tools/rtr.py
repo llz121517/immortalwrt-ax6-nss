@@ -1,23 +1,54 @@
-"""Helper: talk to an OpenWrt router over SSH (dropbear, root with blank password).
+"""Helper: talk to an OpenWrt router over SSH (dropbear, key or blank-password root).
 
-Set ROUTER_HOST if the router is not at the default address:
+Tries, in order: local SSH key (ROUTER_KEY, or ~/.ssh/id_ed25519_ayaka /
+id_ed25519 / id_rsa), the "none" method, then a blank password. Set
+ROUTER_HOST if the router is not at the default address:
 
     export ROUTER_HOST=192.168.10.1
 
 dropbear has no SFTP, so file transfer goes through `cat >` / `base64`.
 """
 import base64
+import glob
 import os
 
 import paramiko
 
 ROUTER = os.environ.get("ROUTER_HOST", "192.168.10.1")
 
+_KEY_CANDIDATES = [
+    os.environ.get("ROUTER_KEY", ""),
+    os.path.expanduser("~/.ssh/id_ed25519_ayaka"),
+    os.path.expanduser("~/.ssh/id_ed25519"),
+    os.path.expanduser("~/.ssh/id_rsa"),
+]
+
+
+def _local_keys():
+    for path in _KEY_CANDIDATES:
+        for p in ([path] if path else []) + glob.glob(path.replace("~", os.path.expanduser("~"))):
+            if p and os.path.isfile(p) and not p.endswith(".pub"):
+                try:
+                    yield paramiko.PKey.from_path(p)
+                except Exception:
+                    continue
+
 
 def connect(timeout=20):
     t = paramiko.Transport((ROUTER, 22))
     t.start_client(timeout=timeout)
-    t.auth_none("root")
+    for key in _local_keys():
+        try:
+            t.auth_publickey("root", key)
+            return t
+        except paramiko.AuthenticationException:
+            continue
+    try:
+        t.auth_none("root")
+    except paramiko.BadAuthenticationType:
+        # Some dropbear builds/configs refuse the "none" method; root usually
+        # has a blank password (passwordless-root profile), so try that.
+        t.auth_password("root", os.environ.get("ROUTER_PASSWORD", ""))
     return t
 
 
