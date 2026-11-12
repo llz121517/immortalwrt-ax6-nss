@@ -177,12 +177,12 @@ CONFIG_TARGET_PER_DEVICE_ROOTFS=y
 CONFIG_PACKAGE_kmod-qca-nss-dp=y
 CONFIG_PACKAGE_kmod-qca-nss-drv=y
 CONFIG_PACKAGE_kmod-qca-nss-ecm=y
-CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y
-# 上面两个包的 Kconfig 依赖 @NSS_DRV_BRIDGE_ENABLE / @NSS_DRV_VLAN_ENABLE，
-# 这两个符号默认 n。不显式打开时 make defconfig 会把 kmod 行改回 "not set"，
-# 桥接/VLAN 流量就不进 NSS（静默失效，路由流测试照不到）。
-CONFIG_NSS_DRV_BRIDGE_ENABLE=y
-CONFIG_NSS_DRV_VLAN_ENABLE=y
+# 这台设备 rootfs 卷只有 29 MiB（ubi0_1 = 240 LEB），p2 镜像已经用满，
+# bridge-mgr/vlan-mgr 的模块塞不进去；实测 br-lan 转发不装它们也能
+# accel_mode=2，所以不选。需要 bridge/VLAN 级 offload 就按 README 用 apk
+# 装到 overlay（这两条用 "is not set"，否则符号默认 n 时 defconfig 会把包丢掉）。
+# CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr is not set
+# CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr is not set
 CONFIG_PACKAGE_nss-firmware=y
 CONFIG_PACKAGE_nss-firmware-ipq807x=y
 
@@ -233,35 +233,29 @@ CONFIG_PACKAGE_ttyd=y
 CONFIG_PACKAGE_luci-app-ttyd=y
 CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
 
-# nft fullcone (IPv4 + IPv6). kmod-nft-fullcone's KCONFIG sets
-# CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y, which switches
-# nf_conntrack_register_notifier() to the notifier_block API. qca-nss-ecm needs
-# feed patch 0007 for that (installed by port-nss-to-immortalwrt.sh
-# --ecm-only); without it the ECM build fails with incompatible pointer type.
-# firewall4 checks the nft_fullcone expression at runtime and disables itself if
-# the module is missing, so this must be built in for `fullcone=1` to work.
-CONFIG_PACKAGE_kmod-nft-fullcone=y
-
-# ons-usb / 光猫 USB 共享：ONT SMB1 -> AX6 cifs mount -> AX6 Samba4
-# （/usr/bin/ont-usb.sh 放 /etc 里跨 sysupgrade 保留）
-CONFIG_PACKAGE_kmod-fs-cifs=y
-CONFIG_PACKAGE_samba4-server=y
-CONFIG_PACKAGE_samba4-client=y
-CONFIG_PACKAGE_samba4-utils=y
+# 下面这些都不进镜像：29 MiB 的 rootfs 卷装不下，改成刷机后用 apk 装到 overlay。
+#   kmod-nft-fullcone   fullcone/fullcone6；内核已经带 CHAIN_EVENTS（port 脚本 2b）
+#   kmod-fs-cifs        ont-usb 挂载光猫 SMB1 共享
+#   samba4-*            AX6 侧 SMB2/3 共享（Windows 访问）
+# CONFIG_PACKAGE_kmod-nft-fullcone is not set
+# CONFIG_PACKAGE_kmod-fs-cifs is not set
+# CONFIG_PACKAGE_samba4-server is not set
+# CONFIG_PACKAGE_samba4-client is not set
+# CONFIG_PACKAGE_samba4-utils is not set
 EOF
 make defconfig >>"$LOG" 2>&1 || die "make defconfig 失败"
 info "已选中的关键项："
-grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI|ATH11K_NSS|MAC80211_NSS|NSS_DRV_(WIFI|BRIDGE|VLAN)|nft-fullcone|kmod-fs-cifs|samba4-server' .config | sed 's/^/    /'
-# 静默失效检查：这几个符号被 defconfig 丢掉就意味着对应功能不生效。
-for sym in NSS_DRV_BRIDGE_ENABLE NSS_DRV_VLAN_ENABLE; do
-	grep -q "^CONFIG_$sym=y" .config || die "CONFIG_$sym 被 defconfig 丢掉（bridge/VLAN 不进 NSS）"
+grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI|ATH11K_NSS|MAC80211_NSS|NSS_DRV_WIFI|ttyd|iperf3' .config | sed 's/^/    /'
+# 静默失效检查：这几项被 defconfig 丢掉，镜像不是想要的那个。
+grep -q '^CONFIG_PACKAGE_kmod-qca-nss-ecm=y' .config || die 'kmod-qca-nss-ecm 没选中'
+grep -q '^CONFIG_ATH11K_NSS_SUPPORT=y' .config \
+	|| warn "ATH11K_NSS_SUPPORT 没选中：WiFi 补丁没贴上，本次镜像无线不加速"
+grep -q '^CONFIG_PACKAGE_ttyd=y' .config || die 'ttyd 没选中'
+# 这几个必须是 not set，选中就会把 rootfs 撑爆（卷只有 29 MiB）。
+for pkg in kmod-nft-fullcone kmod-fs-cifs samba4-server; do
+	grep -q "^CONFIG_PACKAGE_$pkg=y" .config \
+		&& die "CONFIG_PACKAGE_$pkg=y 会把 rootfs 撑爆 29 MiB 的卷，必须刷机后用 apk 装"
 done
-grep -q '^CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y' .config \
-	|| die 'kmod-qca-nss-drv-bridge-mgr 被 defconfig 丢掉'
-grep -q '^CONFIG_PACKAGE_kmod-nft-fullcone=y' .config \
-	|| die 'kmod-nft-fullcone 没选中，fullcone 会静默失效'
-grep -q '^CONFIG_PACKAGE_kmod-fs-cifs=y' .config \
-	|| die 'kmod-fs-cifs 没选中，ont-usb 挂载不了光猫共享'
 
 # ============================================================================
 say "7/7 开始编译（约 40-90 分钟，日志 $LOG）"
@@ -291,6 +285,21 @@ if [ -z "$IMG" ]; then
 	exit 1
 fi
 
+# ---- 尺寸守卫：这台机器是 stock 单卷布局，卷大小写死在 smem 分区表里 ----
+# ubi0_0 kernel = 45 LEB = 5,713,920 B；ubi0_1 rootfs = 240 LEB = 30,474,240 B。
+# 镜像 = uImage 内核 + squashfs，超了任何一段 sysupgrade 都会写失败（内核段写完
+# 才失败会直接不启动）。p2 镜像当时只剩 ~93 KB 余量，所以这里必须拦。
+KERNEL_VOL=5713920
+ROOTFS_VOL=30474240
+IMG_SIZE=$(stat -c %s "$IMG")
+SQ_OFF=$(grep -abo 'hsqs' "$IMG" | head -1 | cut -d: -f1)
+[ -n "$SQ_OFF" ] || die "镜像里找不到 squashfs 魔数，格式不对"
+ROOTFS_SIZE=$((IMG_SIZE - SQ_OFF))
+info "镜像拆分：kernel $SQ_OFF B / $KERNEL_VOL B，rootfs $ROOTFS_SIZE B / $ROOTFS_VOL B"
+[ "$SQ_OFF" -le "$KERNEL_VOL" ] || die "内核段 $SQ_OFF > kernel 卷 $KERNEL_VOL，刷机会失败"
+[ "$ROOTFS_SIZE" -le "$ROOTFS_VOL" ] || die "rootfs $ROOTFS_SIZE > rootfs 卷 $ROOTFS_VOL，刷机会失败"
+info "尺寸检查通过（rootfs 余量 $((ROOTFS_VOL - ROOTFS_SIZE)) B）"
+
 cat <<EOF
 
 镜像：$IMG
@@ -309,12 +318,23 @@ scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 断电 -> 按住 reset -> 上电 -> 浏览器打开 http://192.168.1.1 上传固件
 （改机 U-Boot 自带 HTTP 网页恢复，非小米官方功能）
 
+===== 刷完装运行时的包（29 MiB rootfs 卷装不进镜像）=====
+# fullcone（内核里已带 CHAIN_EVENTS）
+apk add kmod-nft-fullcone
+uci set firewall.@defaults[0].fullcone='1'; uci set firewall.@defaults[0].fullcone6='1'
+uci commit firewall; /etc/init.d/firewall restart
+# ont-usb：光猫 SMB1 -> AX6 cifs -> AX6 Samba4
+apk add kmod-fs-cifs samba4-server samba4-client samba4-utils
+# getent? apk 会从 feed 自动解依赖；装完重启 samba4
+/etc/init.d/samba4 enable; /etc/init.d/samba4 restart
+
 ===== 刷完验证 NSS 是否真的工作 =====
 lsmod | grep -E 'qca_nss|ecm|ath11k'
 ls /dev/nss* 2>/dev/null
 cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count  # 跑流量时 > 0
 ecm_dump.sh | grep 'nss_v4.ported.accel_mode' | head      # 出现 accel_mode=2
 dmesg | grep -i nss | head -20
+nft list ruleset | grep -c fullcone                       # 装完 fullcone 后 > 0
 
 ===== 验证 WiFi 侧 NSS（phase-2）=====
 cat /sys/module/ath11k/parameters/nss_offload   # 1

@@ -84,10 +84,30 @@ immortalwrt/bin/targets/qualcommax/ipq807x/immortalwrt-qualcommax-ipq807x-redmi_
 
 只补 WiFi 补丁时：`python3 port-wifi-nss.py <immortalwrt-tree> <qosmio-tree>`。
 
+构建脚本第 3 步起不再自己维护补丁清单，全部调用 `port-nss-to-immortalwrt.sh`
+（20 个内核补丁 + 8 个内核源文件 + config-6.12 符号 + DTS/profile/platform 的唯一来源），
+feeds 装好后再用 `--ecm-only` 补 ECM 的两个补丁。编译完会检查镜像能否装进
+kernel 5.4 MiB / rootfs 29 MiB 两个卷（见「已知坑 11」），超了直接报错而不是产出刷不进的镜像。
+
 镜像自带的常用工具（均已验证可用）：`htop` `tmux` `iperf3` `jq` `ncdu` `lsof` `socat`
 `rsync` `iftop` `nload` `nano` `zstd` `lspci` `lsusb` `tcpdump` `traceroute`
-`ttyd`+`luci-app-ttyd`。`mtr` 被 defconfig 丢弃，需要时 `apk add mtr-nojson`
-（构建脚本里已加 `CONFIG_PACKAGE_mtr-nojson=y`，下次重编进镜像）。
+`ttyd`+`luci-app-ttyd`。`mtr` 被 defconfig 丢弃，需要时 `apk add mtr-nojson`。
+
+镜像里**故意不放** `kmod-nft-fullcone`、`kmod-fs-cifs`、`samba4-*`：rootfs 卷只有
+29 MiB（见「已知坑 11」），这三样塞不进去。它们都在构建时可用、刷机后从 feed 装：
+
+```sh
+# fullcone（内核侧 CHAIN_EVENTS 已经编进内核，ECM 由 feed 补丁 0007 适配）
+apk add kmod-nft-fullcone
+uci set firewall.@defaults[0].fullcone='1'
+uci set firewall.@defaults[0].fullcone6='1'
+uci commit firewall && /etc/init.d/firewall restart
+nft list ruleset | grep -c fullcone      # > 0 才说明规则真的生效
+
+# ont-usb：光猫 SMB1 -> AX6 cifs 挂载 -> AX6 Samba4(SMB2/3)
+apk add kmod-fs-cifs samba4-server samba4-client samba4-utils
+/etc/init.d/samba4 enable && /etc/init.d/samba4 restart
+```
 
 ## 兼容性警告
 
@@ -131,6 +151,9 @@ ecm_dump.sh | grep 'nss_v4.ported.accel_mode' | head       # 出现 accel_mode=2
 判据是 `accelerated_count > 0` + `accel_mode=2`，**不是** `nf_conntrack` 的 `HW_OFFLOAD`
 （qca-nss-ecm 不走 nf_flow_table，那个标记始终是 0）。
 
+刷完再装运行时包（见「构建」里的 `apk add` 片段）；fullcone 是否真生效用
+`nft list ruleset | grep -c fullcone` 判断，ECM 是否还在加速仍看上面两个判据。
+
 测 WiFi 加速：先 `/etc/init.d/openclash stop`（fake-IP/tproxy 会让流量走用户态，永不加速），
 流量必须真从 WiFi 网卡出去（PC 同时插网线时用 `curl --interface <WiFi IP>` 或加 /32 路由），
 测完 `start` 回来即可。`accelerated_count` 是当前连接数，要在流量进行中采样。
@@ -145,9 +168,12 @@ WiFi offload 生效后 `iw station dump` 字节数不再增长属正常（数据
 5. WiFi NSS 补丁不能按需裁剪，失败用 `regen-nss-hunks.py` 重生成，不要手写 hunk。
 6. 补丁验证只认 `make package/kernel/mac80211/prepare`（fuzz 2），`patch -p1` 默认 fuzz 会误报。
 7. PC 上的代理（FlClash 等）fake-IP 会污染测试，测加速前处理掉。
-8. `kmod-nft-fullcone` 的 `KCONFIG=CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y` 会切换 conntrack notifier API，ECM 必须带 `patches/ecm-chain-events.patch`（由 `port-nss-to-immortalwrt.sh --ecm-only` 装进 feed 作 0007），否则编译报 `incompatible pointer type`。
-9. `kmod-qca-nss-drv-bridge-mgr`/`vlan-mgr` 依赖 `NSS_DRV_BRIDGE_ENABLE`/`NSS_DRV_VLAN_ENABLE`，不显式开 `=y` 会被 `make defconfig` 改回 `not set`，桥接/VLAN 流量就不进 NSS；构建脚本末尾有断言防这个静默失效。
-10. `fullcone`/`fullcone6` 只是 uci 开关，缺 `kmod-nft-fullcone` 时 fw4 会静默关闭 fullcone；本镜像已内置，并在 `uci-defaults/98-fullcone` 里默认开启。
+8. 内核里的 `CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y` 会切换 conntrack notifier API；ECM 靠 `patches/ecm-chain-events.patch`（`port-nss-to-immortalwrt.sh --ecm-only` 装进 feed 作 0007）适配，否则编译报 `incompatible pointer type`。开这个符号是为了刷机后能装 `kmod-nft-fullcone`。
+9. `fullcone`/`fullcone6` 只是 uci 开关；`kmod-nft-fullcone` 不在镜像里（放不下），没装时 fw4 会静默关闭 fullcone，装完并 `firewall restart` 后 `nft list ruleset | grep fullcone` 应有输出。
+10. `bridge-mgr`/`vlan-mgr` 同样因体积不进镜像；实测 br-lan 转发不装它们也能 `accel_mode=2`。要 bridge/VLAN 级 offload 就 `apk add kmod-qca-nss-drv-bridge-mgr kmod-qca-nss-drv-vlan-mgr`（内核符号已 `=y`）。
+11. **rootfs 卷只有 29 MiB（`ubi0_1` = 240 LEB = 30,474,240 B），kernel 卷 45 LEB = 5,713,920 B，写死在 smem 分区表里、改不了（不改 U-Boot 就动不了）。** p2 镜像 kernel 5,656,064 B + rootfs 30,378,772 B，两个卷都只剩几十 KB 余量；任何超出的镜像 sysupgrade 会写失败，内核段写完才失败会直接不启动。所以：
+    - 构建脚本末尾有尺寸守卫，超过卷大小会直接报错；
+    - 大包（fullcone/cifs/samba4/bridge-mgr 等）一律刷机后用 apk 装到 856 MiB 的 overlay（`ubi0_2`），不要往 `.config` 里加。overlay 里的包在 sysupgrade 后仍保留，但 `reset` 会丢，丢了就重新 `apk add`。
 
 ## 仓库结构
 

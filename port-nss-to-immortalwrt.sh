@@ -283,7 +283,8 @@ for kv in \
 	"CONFIG_SKB_RECYCLER_MULTI_CPU=y" \
 	"# CONFIG_SKB_RECYCLER_PREALLOC is not set" \
 	"CONFIG_SKB_RECYCLE_SIZE=2304" \
-	"# CONFIG_ALLOC_SKB_PAGE_FRAG_DISABLE is not set"
+	"# CONFIG_ALLOC_SKB_PAGE_FRAG_DISABLE is not set" \
+	"CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y"
 do
 	sym="${kv%%=*}"; sym="${sym#\# }"; sym="${sym%% *}"
 	if grep -q "^$sym=\|^# $sym is not set" "$CFG" 2>/dev/null; then
@@ -294,20 +295,19 @@ do
 	fi
 done
 
-# ImmortalWrt's firewall4 hard-depends on kmod-nft-fullcone, whose Makefile
-# sets KCONFIG:=CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y.  That flips
-# nf_conntrack_register_notifier() from the nf_ct_event_notifier API (what ECM
-# is written against) to the notifier_block one, and ECM stops compiling:
-#   ecm_conntrack_notifier.c:438: error: passing argument 2 of
-#     'nf_conntrack_register_notifier' from incompatible pointer type
-#   ecm_conntrack_notifier.c:484: error: too few arguments to function
-#     'nf_conntrack_unregister_notifier'
-# With NSS doing the offload, the software fullcone implementation is
-# redundant anyway, so drop the dependency and keep the API ECM expects.
+# CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y above keeps the kernel side of nft-fullcone
+# available.  The user-space/kmod package stays out of the image (the stock
+# single-volume layout has a 29 MiB rootfs volume, already full) and is installed
+# after flashing with `apk add kmod-nft-fullcone`.  ECM is compiled against the
+# chain-events API through feed patch 0007 (see rework_ecm below), so the two
+# coexist.  firewall4's hard dependency on kmod-nft-fullcone is still dropped:
+# otherwise `make defconfig` would pull the module into the image and overflow
+# the rootfs volume.  firewall4 checks for the nft_fullcone expression at
+# runtime, so it works again as soon as the module is installed.
 FW4="$IW/package/network/config/firewall4/Makefile"
 if [ -f "$FW4" ] && grep -q 'kmod-nft-fullcone' "$FW4"; then
 	sed -i 's/ +kmod-nft-fullcone //' "$FW4"
-	ok "firewall4: dropped +kmod-nft-fullcone dependency"
+	ok "firewall4: dropped +kmod-nft-fullcone dependency (install it at runtime)"
 else
 	skip "firewall4 has no kmod-nft-fullcone dependency"
 fi
