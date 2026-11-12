@@ -235,18 +235,14 @@ CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
 
 # 下面这些用 <M>（module）：OpenWrt 会把它们编成 apk 放在
 #   bin/targets/qualcommax/ipq807x/packages/   （kmod 走这里）
-#   bin/packages/aarch64_cortex-a53/{base,packages}/
 # 但不装进镜像——29 MiB 的 rootfs 卷装不下（见 README 已知坑 11）。
-# 刷机后从上面目录把 apk 拷到路由器 apk add 即可，内核符号/版本完全匹配。
+# 内核模块必须用同一次构建的 apk（内核 ABI 哈希对版本），所以这里编；
+# 用户态包（samba4 等）直接刷机后 `apk add` 从 feed 装，不用自己编。
 #   kmod-nft-fullcone   fullcone/fullcone6；内核已经带 CHAIN_EVENTS（port 脚本 2b）
 #   kmod-fs-cifs        ont-usb 挂载光猫 SMB1 共享
-#   samba4-*            AX6 侧 SMB2/3 共享（Windows 访问）
 #   kmod-qca-nss-drv-{bridge,vlan}-mgr   桥接/VLAN 级 offload（可选）
 CONFIG_PACKAGE_kmod-nft-fullcone=m
 CONFIG_PACKAGE_kmod-fs-cifs=m
-CONFIG_PACKAGE_samba4-server=m
-CONFIG_PACKAGE_samba4-client=m
-CONFIG_PACKAGE_samba4-utils=m
 CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=m
 CONFIG_PACKAGE_kmod-qca-nss-drv-vlan-mgr=m
 EOF
@@ -258,8 +254,8 @@ grep -q '^CONFIG_PACKAGE_kmod-qca-nss-ecm=y' .config || die 'kmod-qca-nss-ecm �
 grep -q '^CONFIG_ATH11K_NSS_SUPPORT=y' .config \
 	|| warn "ATH11K_NSS_SUPPORT 没选中：WiFi 补丁没贴上，本次镜像无线不加速"
 grep -q '^CONFIG_PACKAGE_ttyd=y' .config || die 'ttyd 没选中'
-# 这些包必须是 <M> 而不是 <Y>：=y 会把 rootfs 撑爆 29 MiB 的卷。
-for pkg in kmod-nft-fullcone kmod-fs-cifs samba4-server samba4-client samba4-utils; do
+# 这些 kmod 必须是 <M> 而不是 <Y>：=y 会把 rootfs 撑爆 29 MiB 的卷。
+for pkg in kmod-nft-fullcone kmod-fs-cifs; do
 	grep -q "^CONFIG_PACKAGE_$pkg=y" .config \
 		&& die "CONFIG_PACKAGE_$pkg=y 会把 rootfs 撑爆 29 MiB 的卷，必须是 =m（只编 apk）"
 done
@@ -336,10 +332,10 @@ scp $BIN/packages/kmod-nft-fullcone-*.apk root@192.168.10.1:/tmp/
 ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-nft-fullcone-*.apk'
 ssh root@192.168.10.1 'uci set firewall.@defaults[0].fullcone=1; uci set firewall.@defaults[0].fullcone6=1
   uci commit firewall; /etc/init.d/firewall restart; nft list ruleset | grep -c fullcone'
-# ont-usb：光猫 SMB1 -> AX6 cifs -> AX6 Samba4
+# ont-usb：光猫 SMB1 -> AX6 cifs -> AX6 Samba4（samba4 从 feed 装，不用自编）
 scp $BIN/packages/kmod-fs-cifs-*.apk root@192.168.10.1:/tmp/
-ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-fs-cifs-*.apk'
-ssh root@192.168.10.1 'apk add samba4-server samba4-client samba4-utils  # 或装 $IW/bin/packages 里的 apk
+ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-fs-cifs-*.apk
+  apk add samba4-server samba4-client samba4-utils
   /etc/init.d/samba4 enable; /etc/init.d/samba4 restart'
 
 ===== 刷完验证 NSS 是否真的工作 =====

@@ -22,6 +22,7 @@
 |---|---|---|
 | Phase 1 | `qca-nss-dp`/`qca_ssdk`/`qca-nss-drv`/`qca-nss-ecm` + NSS dtsi；有线 `accel_mode=2`、`accelerated_count` 14→19 | [`v25.12-nss`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)，34,621,716 B，sha256 `ea0b8fe9…` |
 | Phase 2 | ath11k/mac80211 NSS 补丁（97 个）；`nss_offload=1`、`frame_mode=2`；WiFi 连接实测 `nss_v4.ported.accel_mode=2`，`accelerated_count` 18→22 | [`v25.12-nss-p2`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)，36,034,836 B，sha256 `a3bb091c…` |
+| Phase 3 | 内核 `CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y` + ECM chain-events 补丁 → 支持运行时 fullcone；cifs/fullcone/bridge-mgr 改为 `<M>`（只出 apk，不占 rootfs）；修 `ipq-wifi-redmi_ax6` 被静默降级、清掉误选包；构建脚本加镜像尺寸守卫 | [`v25.12-nss-p3`](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p3)，34,058,516 B，sha256 `be808658…` |
 
 WiFi 加速证据（真机 `ecm_dump.sh`，下载进行中抓取）：
 
@@ -94,13 +95,13 @@ kernel 5.4 MiB / rootfs 29 MiB 两个卷（见「已知坑 11」），超了直�
 `ttyd`+`luci-app-ttyd`。`mtr` 被 defconfig 丢弃，需要时 `apk add mtr-nojson`。
 
 镜像里**故意不放** `kmod-nft-fullcone`、`kmod-fs-cifs`、`samba4-*`、`bridge-mgr/vlan-mgr`：
-rootfs 卷只有 29 MiB（见「已知坑 11」），塞不进去。构建脚本把它们设成 `<M>`——只编成 apk、
-不装进镜像，所以刷机后从构建输出装（内核模块必须用同一次构建的 apk，版本/ABI 才匹配）：
+rootfs 卷只有 29 MiB（见「已知坑 11」），塞不进去。构建脚本把**内核模块**设成 `<M>`——只编
+apk、不装进镜像（内核模块必须用同一次构建的 apk，版本/ABI 才对得上）；**samba4 这类用户态包
+不用自己编**，刷机后直接从 feed `apk add`：
 
 ```sh
-# kmod 在 bin/targets/qualcommax/ipq807x/packages/，用户态包在 bin/packages/aarch64_cortex-a53/
+# kmod 在 bin/targets/qualcommax/ipq807x/packages/（同一次构建产出）
 scp bin/targets/qualcommax/ipq807x/packages/kmod-*.apk root@192.168.10.1:/tmp/
-scp bin/packages/aarch64_cortex-a53/packages/samba4-*.apk root@192.168.10.1:/tmp/
 
 # fullcone（内核侧 CHAIN_EVENTS 已编进内核，ECM 由 feed 补丁 0007 适配）
 ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-nft-fullcone-*.apk
@@ -110,7 +111,7 @@ ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-nft-fullcone-*.apk
 
 # ont-usb：光猫 SMB1 -> AX6 cifs 挂载 -> AX6 Samba4(SMB2/3)
 ssh root@192.168.10.1 'apk add --allow-untrusted /tmp/kmod-fs-cifs-*.apk
-  apk add --allow-untrusted /tmp/samba4-*.apk
+  apk add samba4-server samba4-client samba4-utils
   /etc/init.d/samba4 enable; /etc/init.d/samba4 restart'
 ```
 
@@ -174,17 +175,18 @@ WiFi offload 生效后 `iw station dump` 字节数不再增长属正常（数据
 6. 补丁验证只认 `make package/kernel/mac80211/prepare`（fuzz 2），`patch -p1` 默认 fuzz 会误报。
 7. PC 上的代理（FlClash 等）fake-IP 会污染测试，测加速前处理掉。
 8. 内核里的 `CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y` 会切换 conntrack notifier API；ECM 靠 `patches/ecm-chain-events.patch`（`port-nss-to-immortalwrt.sh --ecm-only` 装进 feed 作 0007）适配，否则编译报 `incompatible pointer type`。开这个符号是为了刷机后能装 `kmod-nft-fullcone`。
-9. `fullcone`/`fullcone6` 只是 uci 开关；`kmod-nft-fullcone` 不在镜像里（放不下），没装时 fw4 会静默关闭 fullcone，装完并 `firewall restart` 后 `nft list ruleset | grep fullcone` 应有输出。
+9. `fullcone`/`fullcone6` 只是 uci 开关；`kmod-nft-fullcone` 不在镜像里（放不下），没装时 fw4 会静默关闭 fullcone，装完并 `firewall restart` 后 `nft list ruleset | grep fullcone` 应有输出（p3 镜像的 `uci-defaults` 默认把开关设为 1）。**fullcone 的 NAT 改写与 NSS offload 有冲突面**：如果发现 v4 连接 `accel_mode` 不进 2，优先关掉 fullcone 再对比。
 10. `bridge-mgr`/`vlan-mgr` 同样因体积不进镜像；实测 br-lan 转发不装它们也能 `accel_mode=2`。要 bridge/VLAN 级 offload 就 `apk add kmod-qca-nss-drv-bridge-mgr kmod-qca-nss-drv-vlan-mgr`（内核符号已 `=y`）。
-11. **rootfs 卷只有 29 MiB（`ubi0_1` = 240 LEB = 30,474,240 B），kernel 卷 45 LEB = 5,713,920 B，写死在 smem 分区表里、改不了（不改 U-Boot 就动不了）。** p2 镜像 kernel 5,656,064 B + rootfs 30,378,772 B，两个卷都只剩几十 KB 余量；任何超出的镜像 sysupgrade 会写失败，内核段写完才失败会直接不启动。所以：
-    - 构建脚本末尾有尺寸守卫，超过卷大小会直接报错；
-    - 大包（fullcone/cifs/samba4/bridge-mgr 等）一律刷机后用 apk 装到 856 MiB 的 overlay（`ubi0_2`），不要往 `.config` 里加。overlay 里的包在 sysupgrade 后仍保留，但 `reset` 会丢，丢了就重新 `apk add`。
+11. **rootfs 卷只有 29 MiB（`ubi0_1` = 240 LEB = 30,474,240 B），kernel 卷 45 LEB = 5,713,920 B，写死在 smem 分区表里、改不了（不改 U-Boot 就动不了）。** p3 镜像 kernel 段 5,655,552 B + rootfs 段 28,402,964 B（余量约 2 MB；p2 当时几乎用满）；任何超出的镜像 sysupgrade 会写失败，内核段写完才失败会直接不启动。所以：
+    - 构建脚本末尾有尺寸守卫：拆出 `hsqs` 前后两段对比卷大小，超了直接报错；
+    - 大包（fullcone/cifs/samba4/bridge-mgr 等）一律刷机后用 apk 装到 856 MiB 的 overlay（`ubi0_2`），不要往 `.config` 里加。overlay 里的包**重启保留**，但 `sysupgrade` 会清掉（`/etc` 配置保留），升级后重新 `apk add` 即可；
+    - 内核模块（kmod-*）不能用 feed 里同版本号的包装（ABI 对不上），只能从同一次构建输出的 `bin/targets/.../packages/` 装。
 
 ## 仓库结构
 
 ```
 nss-ax6-stock/
-├── build-ax6-nss.sh             # 一键构建（phase-2 镜像）
+├── build-ax6-nss.sh             # 一键构建（phase-3 镜像，含尺寸守卫）
 ├── port-nss-to-immortalwrt.sh   # 内核/NSS 移植（6 步，幂等）
 ├── port-wifi-nss.py             # WiFi NSS 补丁移植（97 个）
 ├── regen-nss-hunks.py           # 失败的 hunk 用 diff 重生成
@@ -200,11 +202,13 @@ nss-ax6-stock/
 
 - `ubiblock0_1` 写错会砖（官方 DTS 正确，脚本不改它）；改机 U-Boot 没有自动回滚，失败只能进它自带的 HTTP 网页恢复。
 - WiFi NSS 失效时把 `ath11k.nss_offload` 置 0（或 `nss_offload=0` 启动参数）回退原生 ath11k。
-- 镜像下载：[v25.12-nss-p2](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
+- 镜像下载：[v25.12-nss-p3](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p3)
+  34,058,516 B，sha256 `be8086583e0482f07909a39d2bf99107489213fba04f61423db81b39477facef`；
+  [v25.12-nss-p2](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss-p2)
   36,034,836 B，sha256 `a3bb091c889de7048efa83b8a97de106990d778bf9055446360197dc19313016`；
   [v25.12-nss](https://github.com/llz121517/immortalwrt-ax6-nss/releases/tag/v25.12-nss)
   34,621,716 B，sha256 `ea0b8fe95f228115e8f4ccee161be2dc664792ba6e4da6a900f4f0d375557215`。
-  两个 Release 的 asset 同名，校验时按 [images/README](images/README.md) 重命名后
+  各 Release 的 asset 同名，校验时按 [images/README](images/README.md) 重命名后
   `sha256sum -c images/SHA256SUMS`（该文件是纯 `sha256sum -c` 格式，无注释行）。
 - 代码与脚本 GPL-2.0；`patches/`、`files/` 保留上游许可；不含 Qualcomm 专有固件。
 - 文档：[docs/WIFI-NSS-RESEARCH.md](docs/WIFI-NSS-RESEARCH.md)、[CREDITS.md](CREDITS.md)。
