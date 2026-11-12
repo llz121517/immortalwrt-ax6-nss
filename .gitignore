@@ -16,3 +16,6 @@ secrets*.txt
 # pre-flash device backups (config tarballs, mtd dumps)
 preflash*/
 router-preflash/
+
+# internal build journal: kept locally, never published
+docs/JOURNAL.md
