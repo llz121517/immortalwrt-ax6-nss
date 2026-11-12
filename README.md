@@ -59,7 +59,7 @@ U-Boot 写的，在这台单分区机器上 `[ "" -eq "1" ]` 会报 `ash: out of
 | 步骤 | 改动 |
 |---|---|
 | 1 | 加 `nss_packages` feed（`NSS-12.5-K6.x`，自带 `0026-nss-drv-add-support-for-kernel-6.12.patch`）|
-| 2 | 应用 11 个 NSS/ECM 内核钩子补丁（ECM CORE、PPPoE、bonding、macvlan、qdisc、bridge-mgr、skb recycler 等）|
+| 2 | 应用 20 个 NSS/ECM 内核钩子补丁（ECM CORE、PPPoE、bonding、macvlan、qdisc、bridge-mgr、skb recycler 等）|
 | 3 | 加 3 个 NSS dtsi，并给 `ipq8071-ax3600.dtsi` 加一行 `#include "ipq8074-nss.dtsi"` |
 | 4 | 校验 `ipq8071-ax6-stock.dts`（官方已正确，仅验证 `ubiblock0_1`）|
 | 5 | `platform.sh` 改为单卷升级（替换 A/B 逻辑）|
@@ -204,7 +204,7 @@ nss-ax6-stock/
 ├── port-nss-to-immortalwrt.sh   # 主移植脚本（6 步，幂等）
 ├── build-ax6-nss.sh             # 一键构建（含完整 .config）
 ├── patch-platform-sh.py         # platform.sh 单卷升级补丁器
-├── patches/                     # 11 个内核补丁（含手工 rebase 的 bonding）
+├── patches/                     # 20 个内核补丁（含手工 rebase 的 bonding）
 ├── files/                       # NSS DTS + 内核源码文件（skb recycler 等）
 ├── images/                      # manifest + SHA256SUMS（二进制走 Release）
 ├── tools/                       # SSH 助手（凭证走环境变量）
