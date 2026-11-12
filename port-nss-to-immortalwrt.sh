@@ -379,6 +379,15 @@ else
 	printf '   [!!] no redmi,ax6-stock arm in %s -- check the tree\n' "$PLATFORM"
 	FAIL=1
 fi
+# A trailing \\ instead of \ makes the shell treat it as a literal backslash:
+# the case pattern breaks at the newline and sourcing the file dies with
+# "syntax error: unexpected newline (expecting ")")". sysupgrade then aborts
+# before writing anything, so the device can never be upgraded again.
+if [ -f "$PLATFORM" ] && ! sh -n "$PLATFORM" 2>/dev/null; then
+	printf '   [!!] %s has a syntax error, sysupgrade would abort:\n' "$PLATFORM"
+	sh -n "$PLATFORM" 2>&1 | head -3
+	FAIL=1
+fi
 
 # ---------------------------------------------------------------------------
 say "6/6 NSS in DEFAULT_PACKAGES and hardware offload on by default"

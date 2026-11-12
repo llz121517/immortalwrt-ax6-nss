@@ -265,6 +265,16 @@ else
 		warn "platform.sh 修改失败，请手工检查"
 	fi
 fi
+# 无论走哪个分支都必须验证语法。行尾写成 \\ 而不是 \ 时，shell 会把它当成
+# 转义后的反斜杠字面量，case 模式在换行处断开，source 阶段直接报
+# "syntax error: unexpected newline (expecting ")")"，sysupgrade 中止，
+# 设备从此完全无法升级。这个坑在本机构建时真实发生过一次。
+if ! sh -n "$PLATFORM" 2>/dev/null; then
+	warn "platform.sh 语法错误，sysupgrade 会直接中止："
+	sh -n "$PLATFORM" 2>&1 | head -3
+	exit 1
+fi
+ok "platform.sh 语法检查通过"
 
 # ============================================================================
 say "7/7 NSS 包与 offload 默认开启"

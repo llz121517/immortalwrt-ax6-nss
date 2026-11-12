@@ -327,3 +327,48 @@ rootfs 里 bonding.ko / ecm.ko / 4 个 nss ko / 2 个 nss 固件全在
 补丁已重新生成：744 行（原 705 行 + 这两个 hunk），dry-run 干净，仓库和 Arch 上
 `~/ax6/scripts/patches/` 都已更新。
 
+
+### 11:39–11:47 platform.sh 双反斜杠：sysupgrade 被自己的补丁毒死（重要）
+
+带 OpenClash 的镜像（27,658,516 B，sha256 `4f77e48ce03a753ad92fa35b6fde985879ae218aa5eb7bcf8d7d38c03d05c5b4`）
+上传到 `/tmp/oc-image.bin`、sha256 核对一致，执行 `sysupgrade -v` 后立刻中止：
+
+```
+/sbin/sysupgrade: /lib/upgrade/platform.sh: line 263: syntax error: unexpected newline (expecting ")")
+```
+
+**设备没被写坏**：sysupgrade 在 source platform.sh 阶段就退出，还没碰 flash。但后果同样严重——
+这台机器当时**完全无法升级**，任何一次 sysupgrade 都会停在这一行。
+
+根因在构建树的 `target/linux/qualcommax/ipq807x/base-files/lib/upgrade/platform.sh`：
+
+```
+^Iredmi,ax6-stock|\\$          ← 行尾是「两个」反斜杠
+```
+
+shell 里 `\\` 是「转义后的反斜杠字面量」，不是续行符；`case` 的模式在换行处被截断，
+于是解析到换行时报 `unexpected newline`。正确写法是单个 `\`。
+
+来源：**最早那版 `build-ax6-nss.sh` 的 heredoc 写进 `\\\\`（shell 折叠成 `\\`）**，
+后来虽然把这段 heredoc 换成调用 `patch-platform-sh.py`，但树里已被写坏的文件没人回头修，
+而每次编译都把它原样打进 rootfs。也就是说：
+
+- `patch-platform-sh.py` 本身是**对的**（普通字符串里 `\\` → 单反斜杠）。事后端到端复核：
+  拿 `git show HEAD:…/platform.sh` 原始 363 行文件跑一遍，输出 `redmi,ax6-stock|\`，
+  `sh -n` 通过，再跑一次打印 `already patched`（幂等）。
+- 真正的问题是「坏脚本看起来专业，但只有它被真正执行过」——审查报告 P0-4 早已写出这个风险，
+  只是没人把它当作必须先验证的阻断项。
+
+修复：
+
+1. 树里的两行（`redmi,ax6-stock|`、`xiaomi,ax3600-stock|`）改成单反斜杠，`sh -n` 通过；
+2. 设备上同一文件同样修好（`/lib/upgrade/platform.sh` 备份在 `/tmp/platform.sh.broken`），
+   `sh -n` 通过，设备恢复「可升级」能力；
+3. 给两个脚本加了**硬断言**：`port-nss-to-immortalwrt.sh` 补丁后 `sh -n` 失败则 `FAIL=1`；
+   `build-ax6-nss.sh` 失败则打印 `sh -n` 前 3 行并 `exit 1`。两个脚本 `bash -n` 均通过。
+
+教训：**凡是往 rootfs 里塞 shell 脚本的移植步骤，编译前必须 `sh -n`**。
+一个字符的转义错误不会在编译期报错，只会在你最需要刷机的那天报错。
+
+顺带：这次也确认了 `4f77e48c` 这个镜像不可作为发布产物（platform.sh 是坏的），
+所以后续还要重编一次，正好把「常用内核模块」一并编进去。
