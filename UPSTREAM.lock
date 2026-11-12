@@ -1,0 +1,6 @@
+# Pinned upstream revisions this image was built and verified against.
+# Format: <name> <url> <ref-at-clone> <commit-sha>
+# When rebasing onto a newer kernel/tree, update all three and rebuild.
+immortalwrt         https://github.com/immortalwrt/immortalwrt.git    openwrt-25.12   761b7ff22cbf7c13f28fc631bd70a84d295fd627
+qosmio/openwrt-ipq  https://github.com/qosmio/openwrt-ipq.git         main-nss        92a2d104145c8d265851c4b388a41bd8e9c21cd9
+qosmio/nss-packages https://github.com/qosmio/nss-packages.git        NSS-12.5-K6.x   0d970dbf0185e3f53709bd803e8a466598023c57
