@@ -258,38 +258,7 @@ elif grep -q 'NSS-STOCK-SINGLE-VOLUME' "$PLATFORM"; then
 else
 	# 本机实测：这台 AX6 的 U-Boot 没有 flag_boot_rootfs，也没有 rootfs_1，
 	# ImmortalWrt 的 A/B 分支会 `[ "" -eq "1" ]` 报 "ash: out of range" 而中止。
-	python3 - "$PLATFORM" <<'PY'
-import sys
-path = sys.argv[1]
-MARKER = "NSS-STOCK-SINGLE-VOLUME"
-NEW = '''redmi,ax6-stock|\\\\
-\txiaomi,ax3600-stock|\\\\
-\txiaomi,ax9000-stock)
-\t\t# NSS-STOCK-SINGLE-VOLUME: single UBI partition, bootloader supplies the
-\t\t# NAND table via SMEM. No rootfs_1 and no flag_boot_rootfs, so the A/B
-\t\t# arm would abort on `[ "" -eq "1" ]` (ash: out of range). Keep the
-\t\t# existing volume IDs (0 kernel, 1 rootfs, 2 rootfs_data); bootargs
-\t\t# already points at /dev/ubiblock0_1.
-\t\tCI_UBIPART="rootfs"
-\t\tnand_do_upgrade "$1"
-\t\t;;'''
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-if MARKER in text:
-    sys.exit(0)
-start = text.find("redmi,ax6-stock|")
-if start < 0:
-    sys.exit("redmi,ax6-stock arm not found")
-end = text.find(";;", start)
-if end < 0:
-    sys.exit("cannot find arm end")
-end += 2
-old = text[start:end]
-if "flag_boot_rootfs" not in old:
-    sys.exit("arm is not the A/B version; refusing to touch")
-with open(path, "w", encoding="utf-8", newline="\n") as fh:
-    fh.write(text[:start] + NEW + text[end:])
-PY
+	python3 "$(dirname "$0")/patch-platform-sh.py" "$PLATFORM"
 	if grep -q 'NSS-STOCK-SINGLE-VOLUME' "$PLATFORM"; then
 		ok "platform.sh: A/B 分支已改为单卷升级"
 	else
@@ -342,18 +311,18 @@ else
 	ok "已添加 nss_packages feed"
 fi
 
-# uci-defaults 开启硬件 offload
+# uci-defaults 关闭 nft offload（ECM 独占快路径）
 UCI_DIR="$QC/ipq807x/base-files/etc/uci-defaults"
 mkdir -p "$UCI_DIR"
 cat > "$UCI_DIR/99-nss-offload" <<'SH'
 #!/bin/sh
-# 启用硬件 flow offload：qca-nss-drv 起来后，ECM 把已建立连接交给 NSS 核，
-# 流量完全离开 CPU。
-uci -q batch <<-EOF
-	set firewall.@defaults[0].flow_offloading='1'
-	set firewall.@defaults[0].flow_offloading_hw='1'
-	commit firewall
-EOF
+# nft flow offloading must stay OFF: fw4's software flowtable takes over
+# established flows before ECM's conntrack hook runs, so ECM never sees the
+# return direction and ecm_classifier_default denies acceleration forever.
+# Let qca-nss-ecm own the fast path (verified: accel_mode=2, accelerated_count>0).
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
 exit 0
 SH
 chmod +x "$UCI_DIR/99-nss-offload"
@@ -469,6 +438,7 @@ scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 ===== 刷完验证 NSS 是否真的工作 =====
 lsmod | grep -E 'qca_nss|ecm'
 ls /dev/nss* 2>/dev/null
-grep -c HW_OFFLOAD /proc/net/nf_conntrack     # 期望 > 0（刷前是 0）
+cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count  # 跑流量时 > 0（实测 14~20）
+ecm_dump.sh | grep 'nss_v4.ported.accel_mode' | head      # 出现 accel_mode=2
 dmesg | grep -i nss | head -20
 EOF

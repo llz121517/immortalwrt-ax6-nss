@@ -119,6 +119,26 @@ immortalwrt/bin/targets/qualcommax/ipq807x/immortalwrt-qualcommax-ipq807x-redmi_
 
 ---
 
+## 兼容性警告（刷机前必读）
+
+**这个镜像只适用于 stock 布局（`redmi,ax6-stock`），不能刷到未扩容的原厂 AX6 上。**
+
+镜像 metadata 写死了 `supported_devices: ["redmi,ax6-stock"]`，而两者的分区布局完全不同：
+
+| | `redmi,ax6-stock`（本镜像） | `redmi,ax6`（未扩容原厂 AX6） |
+|---|---|---|
+| DTS | `ipq8071-ax6-stock.dts`，`compatible = "redmi,ax6-stock"` | `ipq8071-ax6.dts`，`compatible = "redmi,ax6"` |
+| 分区 | `qcom,smem-part` 单卷：`0 kernel / 1 rootfs / 2 rootfs_data` | 小米 A/B：`rootfs` + `rootfs_1`，由 U-Boot 变量切换 |
+| U-Boot 变量 | 只有 `flag_boot_success`，无 `flag_boot_rootfs` | 有 `flag_boot_rootfs` / `flag_last_success` |
+| platform.sh | 单卷逻辑（本工程改的） | `xiaomi_initramfs_prepare` + A/B 逻辑 |
+
+- **正常刷**：`sysupgrade` 会因 board 不匹配拒绝（`Device redmi,ax6 not supported by this image`）。
+- **强行 `-F`**：能写进去，但单卷逻辑写到 A/B 机器的卷上，U-Boot 按 `flag_boot_rootfs` 引导另一个卷 → 起不来，只能进 U-Boot 恢复模式救砖。
+- 内存不是问题（DTS 未写死 memory，由 U-Boot 注入，512 MB 机器理论上能跑）；硬阻断只有布局差异。
+- 要给未扩容原厂 AX6 用，需用它的 `redmi_ax6` profile 重新构建（NSS 补丁本身与布局无关，但要把 DTS include 接到 `ipq8071-ax6.dts` 并保留 A/B 版 `platform.sh`）。
+
+---
+
 ## 刷机
 
 **先备份**（配置 + 状态快照；救砖靠 U-Boot HTTP `192.168.1.1`）：

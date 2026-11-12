@@ -115,9 +115,9 @@ CONFIG_PACKAGE_kmod-qca-nss-drv-bridge-mgr=y
 CONFIG_PACKAGE_nss-firmware=y
 CONFIG_PACKAGE_nss-firmware-ipq807x=y
 
-# Wi-Fi data path offload (ath11k -> NSS)
-CONFIG_ATH11K_NSS_WIFI=y
-CONFIG_PACKAGE_kmod-nss-wifi-drv=y
+# NSS firmware 12.5: the 11.4 choice is the default and its driver tree does
+# not build on 6.12.x; qca-nss-ecm only adds -DNSS_FIRMWARE_VERSION_12_5 here.
+CONFIG_NSS_FIRMWARE_VERSION_12_5=y
 
 # tooling used to verify the result on the box
 CONFIG_PACKAGE_ethtool-full=y
