@@ -13,9 +13,10 @@
 #   1. 检查环境（磁盘 ≥25GB、内存、CPU）
 #   2. 装编译依赖（Arch 用 pacman，Debian 系用 apt）
 #   3. 克隆 ImmortalWrt 25.12 + qosmio NSS 包
-#   4. 移植 NSS：加 feed、9 个内核补丁、3 个 dtsi、profile、修 platform.sh
-#   5. 配置并编译
-#   6. 打印镜像路径
+#   4. 移植 NSS：加 feed、内核补丁、3 个 dtsi、profile、修 platform.sh
+#   5. 移植 WiFi NSS：ath11k/mac80211 97 个补丁（phase-2）
+#   6. 生成 .config（NSS + WiFi offload + 常用工具）并编译
+#   7. 打印镜像路径与验证命令（有线 + WiFi）
 #
 # 全程幂等：中断后重跑会跳过已完成步骤。
 # ============================================================================
@@ -339,6 +340,19 @@ chmod +x "$UCI_DIR/99-nss-offload"
 ok "uci-defaults/99-nss-offload 已写入"
 
 # ============================================================================
+say "NSS WiFi offload 补丁（phase-2：ath11k / mac80211）"
+# ============================================================================
+# 有线 offload 只解决以太网；WiFi 走的是原生 ath11k 软转发。phase-2 把 qosmio 的
+# ath11k/mac80211 NSS 补丁系列移植过来（subsys 27 + ath10k 1 + ath11k 69 = 97 个）。
+# 补丁之间有隐式依赖，不能"按需裁剪"；port-wifi-nss.py 是幂等的，重复执行安全。
+if python3 "$(dirname "$0")/port-wifi-nss.py" "$IW" "$QS" >>"$LOG" 2>&1; then
+	ok "WiFi NSS 补丁已移植（97 个：subsys/ath10k/ath11k）"
+else
+	warn "WiFi NSS 补丁移植失败（上游漂移？）——本次构建将退回原生 ath11k，无线不加速。"
+	warn "排查：用 regen-nss-hunks.py 重新生成失败的 hunk，见 README"
+fi
+
+# ============================================================================
 say "更新 feeds"
 # ============================================================================
 cd "$IW"
@@ -383,17 +397,42 @@ CONFIG_PACKAGE_nss-firmware-ipq807x=y
 CONFIG_NSS_FIRMWARE_VERSION_12_5=y
 # CONFIG_NSS_FIRMWARE_VERSION_11_4 is not set
 
-# NSS WiFi offload is a separate phase: it needs qosmio's 98 mac80211 patches
-# (package/kernel/mac80211/patches/nss/: ath11k 69 + subsys 27 + ath10k 2) plus
-# a kmod-nss-wifi-drv provider, none of which exist in the ImmortalWrt tree, so
-# these symbols are dropped by defconfig and WiFi stays on stock ath11k.
-# CONFIG_ATH11K_NSS_WIFI is not set
-# CONFIG_PACKAGE_kmod-nss-wifi-drv is not set
+# WiFi NSS offload（phase-2）：port-wifi-nss.py 会给 ath11k 加 nss.c、给 mac80211 加
+# NSS 支持。这些符号只有在补丁成功移植后才存在；补丁失败时 make defconfig 会把它们丢掉，
+# 回落成原生 ath11k（有线仍加速，无线不加速），构建不会失败。
+CONFIG_ATH11K_NSS_SUPPORT=y
+CONFIG_ATH11K_MEM_PROFILE_1G=y
+CONFIG_PACKAGE_MAC80211_NSS_SUPPORT=y
+CONFIG_NSS_DRV_WIFIOFFLOAD_ENABLE=y
+CONFIG_NSS_DRV_WIFI_EXT_VDEV_ENABLE=y
+# mesh offload 保持关闭：家里用不到，开着只会增加故障面
+# CONFIG_PACKAGE_MAC80211_NSS_MESH_SUPPORT is not set
 
 CONFIG_PACKAGE_ethtool-full=y
 CONFIG_PACKAGE_iperf3=y
 CONFIG_PACKAGE_htop=y
 CONFIG_PACKAGE_curl=y
+
+# 常用排障/运维工具（phase-2 一起带上；mtr 在 25.12 的 defconfig 里会被丢掉，
+# 所以写成 mtr-nojson，运行时也可 apk add mtr-nojson 临时补）
+CONFIG_PACKAGE_tmux=y
+CONFIG_PACKAGE_jq=y
+CONFIG_PACKAGE_ncdu=y
+CONFIG_PACKAGE_lsof=y
+CONFIG_PACKAGE_socat=y
+CONFIG_PACKAGE_rsync=y
+CONFIG_PACKAGE_usbutils=y
+CONFIG_PACKAGE_pciutils=y
+CONFIG_PACKAGE_iftop=y
+CONFIG_PACKAGE_nload=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_zstd=y
+CONFIG_PACKAGE_tcpdump=y
+CONFIG_PACKAGE_traceroute=y
+CONFIG_PACKAGE_mtr-nojson=y
+CONFIG_PACKAGE_ttyd=y
+CONFIG_PACKAGE_luci-app-ttyd=y
+CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
 
 # MUST stay off.  kmod-nft-fullcone's Makefile does
 #   KCONFIG:=CONFIG_NF_CONNTRACK_CHAIN_EVENTS=y
@@ -407,7 +446,7 @@ CONFIG_PACKAGE_curl=y
 EOF
 make defconfig >>"$LOG" 2>&1 || die "make defconfig 失败"
 info "已选中的关键项："
-grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI' .config | sed 's/^/    /'
+grep -E 'DEVICE_redmi_ax6-stock|kmod-qca-nss|nss-firmware|NSS_WIFI|ATH11K_NSS|MAC80211_NSS|NSS_DRV_WIFI' .config | sed 's/^/    /'
 
 # ============================================================================
 say "开始编译（约 40-90 分钟，日志 $LOG）"
@@ -456,9 +495,17 @@ scp root@192.168.10.1:/tmp/backup-*.tar.gz .
 （本机 U-Boot 已确认有 HTTP 恢复服务器）
 
 ===== 刷完验证 NSS 是否真的工作 =====
-lsmod | grep -E 'qca_nss|ecm'
+lsmod | grep -E 'qca_nss|ecm|ath11k'
 ls /dev/nss* 2>/dev/null
-cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count  # 跑流量时 > 0（实测 14~20）
+cat /sys/kernel/debug/ecm/ecm_nss_ipv4/accelerated_count  # 跑流量时 > 0
 ecm_dump.sh | grep 'nss_v4.ported.accel_mode' | head      # 出现 accel_mode=2
 dmesg | grep -i nss | head -20
+
+===== 验证 WiFi 侧 NSS（phase-2）=====
+cat /sys/module/ath11k/parameters/nss_offload   # 1
+cat /sys/module/ath11k/parameters/frame_mode     # 2
+dmesg | grep 'nss init soc'                      # nss if_num 203
+nss_diag -c                                      # NSS FW / ATH11K FW / 接口 checksum
+# 测 WiFi 加速：先 /etc/init.d/openclash stop，再用 WiFi 网卡下载，
+# 期间 ecm_dump.sh 里该连接的 nss_v4.ported.accel_mode 应为 2；测完 start 回来。
 EOF
